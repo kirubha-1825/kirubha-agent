@@ -153,7 +153,7 @@ def ask_ai_agent(prompt: str, log_container=None):
     if gemini_key:
         update_logs(logs, "⏳ 1வது முயற்சி: Google Gemini சரிபார்க்கப்படுகிறது...", log_container)
         try:
-            for m_name in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash"]:
+            for m_name in ["gemini-1.5-pro", "gemini-1.5-pro", "gemini-2.5-flash"]:
                 try:
                     m = genai.GenerativeModel(m_name, system_instruction=system_instruction)
                     response = m.generate_content(prompt)
@@ -439,7 +439,7 @@ elif MIC_RECORDER_AVAILABLE and mic_recorder is not None:
             try:
                 if gemini_key:
                     genai.configure(api_key=gemini_key)
-                    audio_m = genai.GenerativeModel("gemini-1.5-flash")
+                    audio_m = genai.GenerativeModel("gemini-1.5-pro")
                     audio_part = {"mime_type": "audio/wav", "data": recorded_audio["bytes"]}
                     audio_res = audio_m.generate_content([
                         audio_part,
@@ -456,7 +456,7 @@ if audio_file is not None:
         try:
             if gemini_key:
                 genai.configure(api_key=gemini_key)
-                audio_model = genai.GenerativeModel("gemini-1.5-flash")
+                audio_model = genai.GenerativeModel("gemini-1.5-pro")
                 audio_bytes = audio_file.getvalue()
                 audio_part = {"mime_type": audio_file.type or "audio/wav", "data": audio_bytes}
                 audio_res = audio_model.generate_content([
