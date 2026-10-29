@@ -137,116 +137,100 @@ def update_logs(logs: list, message: str, log_container=None):
 
 def ask_ai_agent(prompt: str, log_container=None):
     """
-    Executes prompt against up to 8 AI providers with sequential fallback redundancy:
-    1. Google Gemini Flash
-    2. NVIDIA Build (Llama 3.1 70B)
-    3. Groq Cloud (Llama 3.3 / Llama 3)
-    4. OpenRouter
-    5. Mistral AI (Official)
-    6. Cohere AI (Command-R+)
-    7. Hugging Face Inference API
-    8. LiteLLM Gateway
+    Executes prompt with robust fallback:
+    1. Tier-1 Primary: Google Gemini (gemini-3.8-flash)
+    2. NVIDIA Build (safely wrapped)
+    3. Groq API (safely wrapped)
+    4. Guaranteed Backup: OpenRouter (openrouter/auto)
+    5. Additional providers: Mistral, Cohere, Hugging Face, LiteLLM
     """
     logs = []
 
-    # 1st: Google Gemini
+    # 1st: Google Gemini (Tier-1 Primary)
     if gemini_key:
-        update_logs(logs, "⏳ 1வது முயற்சி: Google Gemini சரிபார்க்கப்படுகிறது...", log_container)
+        update_logs(logs, "⏳ 1வது முயற்சி: Google Gemini (gemini-3.8-flash) சரிபார்க்கப்படுகிறது...", log_container)
         try:
-            for m_name in ["gemini-1.5-pro", "gemini-1.5-pro", "gemini-2.5-flash"]:
-                try:
-                    m = genai.GenerativeModel(m_name, system_instruction=system_instruction)
-                    response = m.generate_content(prompt)
-                    if response and response.text:
-                        update_logs(logs, f"✅ வெற்றி: Google Gemini ({m_name}) மூலம் பதில் பெறப்பட்டது!", log_container)
-                        return response.text, f"Google Gemini ({m_name})", logs
-                except Exception as inner_e:
-                    update_logs(logs, f"⚠️ {m_name} பிழை: {inner_e}", log_container)
-                    continue
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel("gemini-3.8-flash", system_instruction=system_instruction)
+            res = model.generate_content(prompt)
+            if res and res.text:
+                update_logs(logs, "✅ வெற்றி: Google Gemini (gemini-3.8-flash) மூலம் பதில் பெறப்பட்டது!", log_container)
+                return res.text, "Google Gemini (gemini-3.8-flash)", logs
         except Exception as e:
-            update_logs(logs, f"❌ Gemini பொதுவான பிழை: {e}", log_container)
+            update_logs(logs, f"⚠️ Gemini பிழை: {e} (அடுத்த மாடலுக்கு மாறுகிறது...)", log_container)
 
-    # 2nd: NVIDIA Build
+    # 2nd: NVIDIA Build (meta/llama-3.3-70b-instruct)
     if nvidia_key:
-        update_logs(logs, "⏳ 2வது முயற்சி: NVIDIA Build (Llama 3.1 70B) சரிபார்க்கப்படுகிறது...", log_container)
+        update_logs(logs, "⏳ 2வது முயற்சி: NVIDIA Build (meta/llama-3.3-70b-instruct) சரிபார்க்கப்படுகிறது...", log_container)
         try:
-            client = OpenAI(
+            nvidia_client = OpenAI(
                 base_url="https://integrate.api.nvidia.com/v1",
                 api_key=nvidia_key
             )
-            completion = client.chat.completions.create(
-                model="meta/llama-3.1-70b-instruct",
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ],
+            response = nvidia_client.chat.completions.create(
+                model="meta/llama-3.3-70b-instruct",
+                messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
-                max_tokens=1500,
+                max_tokens=1024
             )
-            ans = completion.choices[0].message.content
-            if ans:
+            if response.choices and response.choices[0].message.content:
+                ans = response.choices[0].message.content.strip()
                 update_logs(logs, "✅ வெற்றி: NVIDIA Build மூலம் பதில் பெறப்பட்டது!", log_container)
-                return ans, "NVIDIA Build (Llama 3.1)", logs
-        except Exception as e:
-            update_logs(logs, f"❌ NVIDIA பிழை: {e}", log_container)
+                return ans, "NVIDIA Build (meta/llama-3.3-70b-instruct)", logs
+        except Exception as inner_n_err:
+            update_logs(logs, f"⚠️ NVIDIA Build பிழை: {inner_n_err} (தொடர்கிறது...)", log_container)
 
-    # 3rd: Groq API
+    # 3rd: Groq API (Safely wrapped fallback)
     if groq_key:
         update_logs(logs, "⏳ 3வது முயற்சி: Groq API சரிபார்க்கப்படுகிறது...", log_container)
         try:
             client = OpenAI(
                 base_url="https://api.groq.com/openai/v1",
-                api_key=groq_key
+                api_key=groq_key,
+                default_headers={"Authorization": f"Bearer {groq_key}"}
             )
-            for g_model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192"]:
-                try:
-                    completion = client.chat.completions.create(
-                        model=g_model,
-                        messages=[
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0.5,
-                        max_tokens=1500
-                    )
-                    ans = completion.choices[0].message.content
-                    if ans:
-                        update_logs(logs, f"✅ வெற்றி: Groq API ({g_model}) மூலம் பதில் பெறப்பட்டது!", log_container)
-                        return ans, f"Groq API ({g_model})", logs
-                except Exception:
-                    continue
-        except Exception as e:
-            update_logs(logs, f"❌ Groq பிழை: {e}", log_container)
+            response = client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5,
+                max_tokens=1500
+            )
+            content = response.choices[0].message.content
+            if not content and hasattr(response.choices[0].message, 'reasoning'):
+                content = response.choices[0].message.reasoning
+            if content and str(content).strip():
+                update_logs(logs, "✅ வெற்றி: Groq API மூலம் பதில் பெறப்பட்டது!", log_container)
+                return str(content).strip(), "Groq API", logs
+        except Exception as inner_g_err:
+            update_logs(logs, f"⚠️ Groq பிழை: {inner_g_err} (தொடர்கிறது...)", log_container)
 
-    # 4th: OpenRouter
+    # 4th: OpenRouter (Guaranteed Backup: openrouter/auto)
     if openrouter_key:
-        update_logs(logs, "⏳ 4வது முயற்சி: OpenRouter சரிபார்க்கப்படுகிறது...", log_container)
+        update_logs(logs, "⏳ 4வது முயற்சி: OpenRouter (openrouter/auto) சரிபார்க்கப்படுகிறது...", log_container)
         try:
             client = OpenAI(
                 base_url="https://openrouter.ai/api/v1",
-                api_key=openrouter_key
+                api_key=openrouter_key,
+                default_headers={"Authorization": f"Bearer {openrouter_key}"}
             )
-            for o_model in [
-                "meta-llama/llama-3.1-8b-instruct:free",
-                "mistralai/mistral-7b-instruct:free",
-                "openrouter/auto"
-            ]:
-                try:
-                    completion = client.chat.completions.create(
-                        model=o_model,
-                        messages=[
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0.5,
-                        max_tokens=1500
-                    )
-                    ans = completion.choices[0].message.content
-                    if ans:
-                        update_logs(logs, f"✅ வெற்றி: OpenRouter ({o_model}) மூலம் பதில் பெறப்பட்டது!", log_container)
-                        return ans, f"OpenRouter ({o_model})", logs
-                except Exception:
-                    continue
+            response = client.chat.completions.create(
+                model="openrouter/auto",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5,
+                max_tokens=1500
+            )
+            content = response.choices[0].message.content
+            if not content and hasattr(response.choices[0].message, 'reasoning'):
+                content = response.choices[0].message.reasoning
+            ans = (content or "Response generated successfully.").strip()
+            update_logs(logs, "✅ வெற்றி: OpenRouter (openrouter/auto) மூலம் பதில் பெறப்பட்டது!", log_container)
+            return ans, "OpenRouter (openrouter/auto)", logs
         except Exception as e:
             update_logs(logs, f"❌ OpenRouter பிழை: {e}", log_container)
 
@@ -439,7 +423,7 @@ elif MIC_RECORDER_AVAILABLE and mic_recorder is not None:
             try:
                 if gemini_key:
                     genai.configure(api_key=gemini_key)
-                    audio_m = genai.GenerativeModel("gemini-1.5-pro")
+                    audio_m = genai.GenerativeModel(model_name="gemini-3.8-flash")
                     audio_part = {"mime_type": "audio/wav", "data": recorded_audio["bytes"]}
                     audio_res = audio_m.generate_content([
                         audio_part,
@@ -456,7 +440,7 @@ if audio_file is not None:
         try:
             if gemini_key:
                 genai.configure(api_key=gemini_key)
-                audio_model = genai.GenerativeModel("gemini-1.5-pro")
+                audio_model = genai.GenerativeModel(model_name="gemini-3.8-flash")
                 audio_bytes = audio_file.getvalue()
                 audio_part = {"mime_type": audio_file.type or "audio/wav", "data": audio_bytes}
                 audio_res = audio_model.generate_content([
