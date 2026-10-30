@@ -4,6 +4,7 @@ import google.generativeai as genai
 from openai import OpenAI
 import requests
 from dotenv import load_dotenv
+from litellm import Router
 
 # Optional Mic Recorder import with safe initialization
 try:
@@ -98,6 +99,47 @@ if gemini_key:
         pass
 
 # ==============================================================================
+# 2.1. LITELLM ROUTER SETUP (Intelligent Routing & Auto-Fallbacks)
+# ==============================================================================
+litellm_model_list = [
+    {
+        "model_name": "general-task",
+        "litellm_params": {
+            "model": "gemini/gemini-3.8-flash",
+            "api_key": gemini_key,
+        },
+    },
+    {
+        "model_name": "coding-task",
+        "litellm_params": {
+            "model": "openrouter/auto",
+            "api_key": openrouter_key,
+        },
+    },
+]
+
+try:
+    litellm_router = Router(
+        model_list=litellm_model_list,
+        fallbacks=[{"general-task": ["coding-task"]}]
+    )
+except Exception:
+    litellm_router = None
+
+
+def classify_task(prompt: str) -> str:
+    """
+    Lightweight Task Classifier (Smart Switch):
+    - Routes coding and technical prompts to 'coding-task' (OpenRouter).
+    - Otherwise defaults to 'general-task' (Gemini).
+    """
+    code_keywords = ["code", "python", "bug", "sql", "function", "logic", "error"]
+    prompt_lower = prompt.lower()
+    if any(keyword in prompt_lower for keyword in code_keywords):
+        return "coding-task"
+    return "general-task"
+
+# ==============================================================================
 # 3. TELEGRAM NOTIFICATION SYSTEM
 # ==============================================================================
 def send_telegram_message(message: str) -> dict:
@@ -137,16 +179,40 @@ def update_logs(logs: list, message: str, log_container=None):
 
 def ask_ai_agent(prompt: str, log_container=None):
     """
-    Executes prompt with robust fallback:
-    1. Tier-1 Primary: Google Gemini (gemini-3.8-flash)
-    2. NVIDIA Build (safely wrapped)
-    3. Groq API (safely wrapped)
-    4. Guaranteed Backup: OpenRouter (openrouter/auto)
-    5. Additional providers: Mistral, Cohere, Hugging Face, LiteLLM
+    Executes prompt with LiteLLM Router intelligent routing and automatic fallback:
+    - Smart Switch: Routes coding prompts to 'coding-task' and general prompts to 'general-task'.
+    - Automatic Fallback: If 'general-task' encounters rate limits or errors, automatically falls back to 'coding-task'.
+    - Secondary Fallbacks: Direct Google Gemini, NVIDIA Build, Groq API, OpenRouter, Mistral AI.
     """
     logs = []
 
-    # 1st: Google Gemini (Tier-1 Primary)
+    # 1st: LiteLLM Intelligent Router Execution (Smart Switch + Auto Fallback)
+    if litellm_router is not None:
+        target_group = classify_task(prompt)
+        update_logs(logs, f"🧠 Smart Switch: பணி பகுப்பாய்வு -> '{target_group}'", log_container)
+        update_logs(logs, f"⏳ LiteLLM Router ({target_group}) மூலம் இயக்கப்படுகிறது...", log_container)
+        try:
+            response = litellm_router.completion(
+                model=target_group,
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5,
+                max_tokens=1500
+            )
+            msg = response.choices[0].message
+            content = msg.content
+            if not content and hasattr(msg, 'reasoning') and msg.reasoning:
+                content = msg.reasoning
+            ans = (content or "Response generated successfully.").strip()
+            actual_model = getattr(response, "model", target_group) or target_group
+            update_logs(logs, f"✅ வெற்றி: LiteLLM Router ({actual_model}) மூலம் பதில் பெறப்பட்டது!", log_container)
+            return ans, f"LiteLLM Router ({actual_model})", logs
+        except Exception as router_err:
+            update_logs(logs, f"⚠️ LiteLLM Router பிழை: {router_err} (நேரடி API Fallback தொடங்குகிறது...)", log_container)
+
+    # 2nd: Direct Google Gemini (Tier-1 Primary)
     if gemini_key:
         update_logs(logs, "⏳ 1வது முயற்சி: Google Gemini (gemini-3.8-flash) சரிபார்க்கப்படுகிறது...", log_container)
         try:
@@ -356,7 +422,7 @@ with st.sidebar:
         ("Mistral AI", bool(mistral_key)),
         ("Cohere AI", bool(cohere_key)),
         ("Hugging Face", bool(huggingface_key)),
-        ("LiteLLM", bool(litellm_key)),
+        ("LiteLLM Router", bool(litellm_router)),
     ]
     
     cols = st.columns(2)
