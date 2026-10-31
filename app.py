@@ -25,6 +25,14 @@ except ImportError:
     mic_recorder = None
     MIC_RECORDER_AVAILABLE = False
 
+# Twilio Voice Call Client import with safe fallback
+try:
+    from twilio.rest import Client as TwilioClient
+    TWILIO_AVAILABLE = True
+except ImportError:
+    TwilioClient = None
+    TWILIO_AVAILABLE = False
+
 # Load local environment variables from .env if present
 load_dotenv()
 
@@ -437,14 +445,53 @@ def send_telegram_alert(message: str) -> dict:
     except Exception as e:
         return {"ok": False, "description": str(e)}
 
+def make_agent_call(message: str = "வணக்கம், உங்கள் ஏஜென்ட் அழைக்கிறது!") -> tuple[bool, str]:
+    """
+    Initiates an automated voice phone call alert via Twilio with Tamil voice synthesis (<Say language='ta-IN'>).
+    Reads credentials from st.secrets (or .env / environment variables):
+    - TWILIO_ACCOUNT_SID
+    - TWILIO_AUTH_TOKEN
+    - TWILIO_PHONE_NUMBER
+    - ADMIN_PHONE_NUMBER
+    """
+    try:
+        if not TWILIO_AVAILABLE or TwilioClient is None:
+            return False, "Twilio package is not installed."
+
+        sid = get_secret("TWILIO_ACCOUNT_SID")
+        token = get_secret("TWILIO_AUTH_TOKEN")
+        from_num = get_secret("TWILIO_PHONE_NUMBER")
+        to_num = get_secret("ADMIN_PHONE_NUMBER")
+
+        if not (sid and token and from_num and to_num):
+            missing = []
+            if not sid: missing.append("TWILIO_ACCOUNT_SID")
+            if not token: missing.append("TWILIO_AUTH_TOKEN")
+            if not from_num: missing.append("TWILIO_PHONE_NUMBER")
+            if not to_num: missing.append("ADMIN_PHONE_NUMBER")
+            return False, f"Missing Twilio secrets: {', '.join(missing)}"
+
+        client = TwilioClient(sid, token)
+        twiml = f"<Response><Say language='ta-IN'>{message}</Say></Response>"
+        
+        call = client.calls.create(
+            twiml=twiml,
+            to=to_num,
+            from_=from_num
+        )
+        return True, str(call.sid)
+    except Exception as e:
+        return False, str(e)
+
 def dispatch_task_alert(task_id: str, task_name: str, status: str, file_path: str = "", extra_details: str = "") -> dict:
     """
     Universal Notification Dispatcher Hook:
     Dispatches task completion or failure alerts across multiple channels:
     1. Telegram Bot (if TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID are configured).
     2. WhatsApp Webhook (stub ready for WhatsApp Cloud API / Twilio / custom webhook payloads).
+    3. Twilio Tamil Voice Call Alert (if TWILIO_ACCOUNT_SID & ADMIN_PHONE_NUMBER are configured).
     """
-    results = {"telegram": None, "whatsapp": None}
+    results = {"telegram": None, "whatsapp": None, "twilio_call": None}
 
     # 1. Telegram Dispatch
     if telegram_token and telegram_chat_id:
@@ -486,6 +533,15 @@ def dispatch_task_alert(task_id: str, task_name: str, status: str, file_path: st
             results["whatsapp"] = {"error": str(we)}
     else:
         results["whatsapp"] = {"status": "unconfigured", "note": "WHATSAPP_WEBHOOK_URL is not configured."}
+
+    # 3. Twilio Voice Call Alert Hook
+    if get_secret("TWILIO_ACCOUNT_SID") and get_secret("ADMIN_PHONE_NUMBER"):
+        if status == "COMPLETED":
+            call_msg = f"வணக்கம்! உங்கள் பணி {task_name[:30]} வெற்றிகரமாக முடிந்தது."
+        else:
+            call_msg = f"வணக்கம்! உங்கள் பணி {task_name[:30]} தோல்வியடைந்தது."
+        ok_call, call_sid_or_err = make_agent_call(call_msg)
+        results["twilio_call"] = {"success": ok_call, "sid_or_error": call_sid_or_err}
 
     return results
 
@@ -793,47 +849,125 @@ def safe_write_code(original_rel_path: str, modified_code: str, custom_suffix: s
     except Exception as e:
         return False, "", f"Atomic save error: {str(e)}"
 
-def transcribe_audio_to_text(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
-    """
-    Transcribes spoken audio bytes to text instructions.
-    Primary: Groq Whisper ('whisper-large-v3-turbo') for sub-second, highly accurate transcription.
-    Fallback: Google Gemini ('gemini-3.8-flash') multimodal audio comprehension.
-    """
-    errors = []
-    # Primary: Groq Whisper
-    if groq_key:
-        try:
-            client = OpenAI(
-                base_url="https://api.groq.com/openai/v1",
-                api_key=groq_key
-            )
-            audio_file = ("audio.wav", io.BytesIO(audio_bytes), mime_type or "audio/wav")
-            transcription = client.audio.transcriptions.create(
-                model="whisper-large-v3-turbo",
-                file=audio_file,
-                response_format="text"
-            )
-            if transcription and transcription.strip():
-                return transcription.strip()
-        except Exception as ge:
-            errors.append(f"Groq Whisper: {ge}")
+VOICE_TECHNICAL_PROMPT = "Python, HTML, CSS, JavaScript, Student Learning App, UI, Workspace"
 
-    # Fallback: Google Gemini
-    if gemini_key:
+def _transcribe_with_whisper(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
+    """Enforces Tamil transcription with language='ta' and initial technical prompt terms via Groq Whisper."""
+    if not groq_key:
+        raise ValueError("GROQ_API_KEY is not configured for Groq Whisper.")
+
+    clean_mime = (mime_type or "audio/wav").split(";")[0].strip().lower()
+    ext = "webm" if "webm" in clean_mime else ("ogg" if "ogg" in clean_mime else ("mp3" if "mp3" in clean_mime else "wav"))
+    client = OpenAI(
+        base_url="https://api.groq.com/openai/v1",
+        api_key=groq_key
+    )
+    audio_file = (f"audio.{ext}", io.BytesIO(audio_bytes), clean_mime)
+    transcription = client.audio.transcriptions.create(
+        model="whisper-large-v3-turbo",
+        file=audio_file,
+        response_format="text",
+        language="ta",
+        prompt=VOICE_TECHNICAL_PROMPT
+    )
+    if isinstance(transcription, str) and transcription.strip():
+        return transcription.strip()
+    if hasattr(transcription, "text") and transcription.text and transcription.text.strip():
+        return transcription.text.strip()
+    raise ValueError("Empty response received from Groq Whisper.")
+
+def _transcribe_with_gemini(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
+    """Routes raw audio bytes directly to Gemini Multimodal Audio API for high-precision Tamil transcription & task extraction."""
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY is not configured for Gemini Multimodal Audio.")
+
+    genai.configure(api_key=gemini_key)
+    model = genai.GenerativeModel("gemini-3.8-flash")
+    
+    clean_mime = (mime_type or "audio/wav").split(";")[0].strip().lower()
+    if clean_mime.startswith("audio/x-"):
+        clean_mime = "audio/" + clean_mime[8:]
+    if "wav" in clean_mime:
+        clean_mime = "audio/wav"
+    elif "webm" in clean_mime:
+        clean_mime = "audio/webm"
+    elif "ogg" in clean_mime:
+        clean_mime = "audio/ogg"
+    elif "mp3" in clean_mime or "mpeg" in clean_mime:
+        clean_mime = "audio/mp3"
+
+    gemini_instruction = (
+        "You are an expert Tamil-English bilingual audio transcription and task instruction extraction engine.\n\n"
+        "Audio Processing Instructions:\n"
+        "1. High-Precision Tamil Transcription: Accurately listen to and transcribe the spoken Tamil or Tanglish words in the audio.\n"
+        "   Preserve key technical vocabulary: Python, HTML, CSS, JavaScript, Student Learning App, UI, Workspace.\n"
+        "2. Task Extraction & Synthesis: Extract the core requirement and formulate a clean, actionable, production-ready coding task specification.\n"
+        "   - If the user spoke in Tamil or Tanglish, provide the full, precise task requirement (in English or bilingual) that an autonomous developer agent can immediately build.\n"
+        "   - Preserve all specific features, UI components (buttons, cards, modals, themes), and tech stack requirements mentioned.\n"
+        "3. Output Format: Return strictly the transcribed text and extracted task requirement. Do not add introductory remarks, meta commentary, or quotes."
+    )
+
+    response = model.generate_content([
+        {
+            "mime_type": clean_mime,
+            "data": audio_bytes
+        },
+        gemini_instruction
+    ])
+    if response and response.text and response.text.strip():
+        return response.text.strip()
+    raise ValueError("Empty response received from Gemini Multimodal Audio API.")
+
+def transcribe_audio_to_text(audio_bytes: bytes, mime_type: str = "audio/wav", engine: str = "auto") -> str:
+    """
+    Transcribes spoken audio bytes to text instructions with Tamil language support & technical vocabulary:
+    1. Groq Whisper: Enforces Tamil transcription with language='ta' and initial technical prompt terms:
+       ('Python, HTML, CSS, JavaScript, Student Learning App, UI, Workspace').
+    2. Gemini Multimodal Audio API: Routes raw audio bytes directly to Gemini for high-precision
+       Tamil transcription and task extraction.
+    """
+    if not audio_bytes or len(audio_bytes) < 64:
+        raise ValueError("Audio recording is empty or corrupt.")
+
+    errors = []
+    engine_lower = (engine or "auto").lower()
+
+    # Route 1: Direct Gemini Multimodal routing
+    if "gemini" in engine_lower:
         try:
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel("gemini-3.8-flash")
-            response = model.generate_content([
-                {
-                    "mime_type": mime_type or "audio/wav",
-                    "data": audio_bytes
-                },
-                "Please accurately transcribe the spoken coding or task instruction in this audio. Return ONLY the transcribed text without extra explanations or quotes."
-            ])
-            if response and response.text:
-                return response.text.strip()
-        except Exception as me:
-            errors.append(f"Gemini: {me}")
+            return _transcribe_with_gemini(audio_bytes, mime_type)
+        except Exception as ge:
+            errors.append(f"Gemini Multimodal: {ge}")
+        if groq_key:
+            try:
+                return _transcribe_with_whisper(audio_bytes, mime_type)
+            except Exception as we:
+                errors.append(f"Whisper Fallback: {we}")
+
+    # Route 2: Direct Groq Whisper routing (with language='ta' and technical terms)
+    elif "whisper" in engine_lower:
+        try:
+            return _transcribe_with_whisper(audio_bytes, mime_type)
+        except Exception as we:
+            errors.append(f"Groq Whisper: {we}")
+        if gemini_key:
+            try:
+                return _transcribe_with_gemini(audio_bytes, mime_type)
+            except Exception as ge:
+                errors.append(f"Gemini Fallback: {ge}")
+
+    # Route 3: Auto-route (Gemini primary for Tamil + task extraction, Whisper fallback)
+    else:
+        if gemini_key:
+            try:
+                return _transcribe_with_gemini(audio_bytes, mime_type)
+            except Exception as ge:
+                errors.append(f"Gemini Multimodal: {ge}")
+        if groq_key:
+            try:
+                return _transcribe_with_whisper(audio_bytes, mime_type)
+            except Exception as we:
+                errors.append(f"Groq Whisper: {we}")
 
     raise RuntimeError(f"Audio transcription failed: {'; '.join(errors)}")
 
@@ -1523,6 +1657,7 @@ with st.sidebar:
     st.markdown(f"🟢 **OpenRouter** (`openrouter/auto`)" if openrouter_key else "⚪ *OpenRouter (Missing Key)*")
     st.markdown(f"🟢 **Telegram Alerts**" if (telegram_token and telegram_chat_id) else "⚪ *Telegram Alerts (Unconfigured)*")
     st.markdown(f"🟢 **WhatsApp Webhook**" if get_secret("WHATSAPP_WEBHOOK_URL") else "⚪ *WhatsApp Webhook (Stub Ready)*")
+    st.markdown(f"🟢 **Twilio Voice Call** (`ta-IN`)" if (get_secret("TWILIO_ACCOUNT_SID") and get_secret("ADMIN_PHONE_NUMBER")) else "⚪ *Twilio Voice Call (Unconfigured)*")
 
     st.markdown("---")
 
@@ -1552,6 +1687,22 @@ with st.sidebar:
     out_files = [f for f in os.listdir(OUTPUT_DIR) if os.path.isfile(os.path.join(OUTPUT_DIR, f)) and not f.endswith('.tmp')] if os.path.exists(OUTPUT_DIR) else []
     st.caption(f"📁 **Workspace:** `{len(ws_files)} files` in `{WORKSPACE_DIR}/`")
     st.caption(f"📦 **Outputs:** `{len(out_files)} files` in `{OUTPUT_DIR}/`")
+
+    st.markdown("---")
+    st.markdown("**📞 Twilio Voice Call Alert:**")
+    admin_num = get_secret("ADMIN_PHONE_NUMBER")
+    if admin_num:
+        st.caption(f"Target: `{admin_num}`")
+    else:
+        st.caption("Configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, and `ADMIN_PHONE_NUMBER` in secrets.")
+
+    if st.button("📞 Call Me Now (Test Agent Alert)", key="sidebar_test_call_btn", use_container_width=True):
+        with st.spinner("Connecting to phone..."):
+            ok, res = make_agent_call("வணக்கம்! உங்கள் ஏஜென்ட் வெற்றிகரமாக இணைக்கப்பட்டுள்ளது.")
+            if ok:
+                st.success(f"Calling your number now! Call SID: {res}")
+            else:
+                st.error(f"Call failed: {res}")
 
     if st.button("🔄 Refresh View", use_container_width=True):
         st.rerun()
@@ -1783,13 +1934,31 @@ with tab_create:
         st.session_state["task_folder_val"] = ""
 
     # Voice Input Component
-    st.markdown("##### 🎙️ Voice Input (Speak Your Instructions):")
+    st.markdown("##### 🎙️ Voice Input (Tamil & Bilingual Voice Instructions):")
+    v_opt_col1, v_opt_col2 = st.columns([3, 2])
+    with v_opt_col1:
+        voice_engine_choice = st.radio(
+            "Transcription Route:",
+            options=[
+                "✨ Gemini Multimodal Audio (High-Precision Tamil & Task Extraction)",
+                "⚡ Groq Whisper (Tamil language='ta' with Technical Prompt)"
+            ],
+            index=0,
+            horizontal=True,
+            key="voice_engine_route_selector"
+        )
+    with v_opt_col2:
+        if "Gemini" in voice_engine_choice:
+            st.caption("🎯 **Gemini Multimodal**: Raw audio bytes routed directly to Gemini for nuanced Tamil transcription and complete task specification extraction.")
+        else:
+            st.caption("🚀 **Groq Whisper**: Fast transcription with `language='ta'` guided by terms: *Python, HTML, CSS, JavaScript, Student Learning App, UI, Workspace*.")
+
     col_v1, col_v2 = st.columns([3, 2])
     with col_v1:
         v_audio = None
         audio_mime = "audio/wav"
         if hasattr(st, "audio_input"):
-            v_audio_file = st.audio_input("Record voice instruction:", key="voice_audio_input")
+            v_audio_file = st.audio_input("Record voice instruction in Tamil or English:", key="voice_audio_input")
             if v_audio_file is not None:
                 v_audio = v_audio_file.getvalue()
                 audio_mime = v_audio_file.type or "audio/wav"
@@ -1807,19 +1976,21 @@ with tab_create:
             import hashlib
             audio_hash = hashlib.md5(v_audio).hexdigest()
             if st.session_state.get("prev_audio_hash") != audio_hash:
-                with st.spinner("🎙️ Transcribing voice instruction via Groq Whisper / Gemini..."):
+                engine_key = "gemini" if "Gemini" in voice_engine_choice else "whisper"
+                engine_display = "Gemini Multimodal Audio API" if engine_key == "gemini" else "Groq Whisper (ta)"
+                with st.spinner(f"🎙️ Processing voice instruction via {engine_display}..."):
                     try:
-                        transcribed_text = transcribe_audio_to_text(v_audio, mime_type=audio_mime)
+                        transcribed_text = transcribe_audio_to_text(v_audio, mime_type=audio_mime, engine=engine_key)
                         st.session_state["prev_audio_hash"] = audio_hash
                         st.session_state["transcribed_voice_text"] = transcribed_text
                         st.session_state["task_prompt_val"] = transcribed_text
-                        st.toast("Voice instruction transcribed successfully!")
+                        st.toast(f"Voice instruction transcribed successfully via {engine_display}!")
                     except Exception as ve:
                         st.warning(f"Voice transcription notice: {ve}")
 
     with col_v2:
         if st.session_state.get("transcribed_voice_text"):
-            st.info(f"🎙️ **Transcribed Audio:** \"{st.session_state['transcribed_voice_text']}\"")
+            st.info(f"🎙️ **Transcribed Audio & Extracted Task:**\n\n\"{st.session_state['transcribed_voice_text']}\"")
             if st.button("Apply Transcribed Text to Prompt", use_container_width=True):
                 st.session_state["task_prompt_val"] = st.session_state["transcribed_voice_text"]
                 st.rerun()
@@ -1885,6 +2056,20 @@ with tab_create:
             st.success(f"🚀 Task dispatched autonomously! Task ID: `{new_task_id}`")
             st.toast("Worker thread running in background!")
             st.info("You can safely close this browser tab, refresh, or switch tabs while the task executes in the background.")
+
+    with st.expander("🔔 Instant Notification & Twilio Voice Call Test", expanded=False):
+        c_call1, c_call2 = st.columns([3, 2])
+        with c_call1:
+            st.markdown("**Twilio Tamil Voice Alert (`<Say language='ta-IN'>`):**")
+            st.caption("When autonomous tasks finish or encounter errors in the background, your phone receives an immediate call in Tamil.")
+        with c_call2:
+            if st.button("📞 Call Me Now (Test Agent Alert)", key="tab1_test_call_btn", use_container_width=True):
+                with st.spinner("Connecting to phone..."):
+                    ok, res = make_agent_call("வணக்கம்! உங்கள் ஏஜென்ட் வெற்றிகரமாக இணைக்கப்பட்டுள்ளது.")
+                    if ok:
+                        st.success(f"Calling your number now! Call SID: {res}")
+                    else:
+                        st.error(f"Call failed: {res}")
 
 # ------------------------------------------------------------------------------
 # TAB 2: AUTO-CODE EDITOR & REFINER

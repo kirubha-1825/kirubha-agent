@@ -5,3 +5,4 @@ python-dotenv>=1.0.0
 streamlit-mic-recorder>=0.0.8
 openai>=1.0.0
 litellm>=1.0.0
+twilio>=9.0.0
