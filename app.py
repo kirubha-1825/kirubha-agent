@@ -33,6 +33,30 @@ except ImportError:
     TwilioClient = None
     TWILIO_AVAILABLE = False
 
+# SRI Execution Gate Boundary & Security Enforcement
+from sri_execution_gate import SriExecutionGate
+sri_execution_gate = SriExecutionGate()
+
+# SRI Design & Launch Guard (Stitch AI & Frontend UI Guard)
+from sri_design_and_launch_guard import SriDesignAndLaunchGuard
+sri_design_guard = SriDesignAndLaunchGuard()
+
+# SRI Master Voice Router (Key: ...1825 -> Stitch AI / Gemini Pro / OpenRouter)
+from sri_voice_router import SriMasterVoiceRouter
+sri_voice_router = SriMasterVoiceRouter()
+
+# SRI Universal Voice Router (speech_recognition ta-IN -> Best AI Selector)
+from sri_universal_voice_router import SriUniversalVoiceRouter
+sri_universal_router = SriUniversalVoiceRouter()
+
+# SRI Universal Master Agent (Multi-AI Orchestration & Approved Work Areas)
+from sri_universal_master_agent import SriUniversalMasterAgent
+sri_master_agent = SriUniversalMasterAgent()
+
+
+
+
+
 # Load local environment variables from .env if present
 load_dotenv()
 
@@ -146,8 +170,8 @@ def is_safe_sandbox_path(target_path: str, base_dir: str = WORKSPACE_DIR) -> tup
 
 # Configure Streamlit Page
 st.set_page_config(
-    page_title="Autonomous Agent | Background Execution Engine",
-    page_icon="⚡",
+    page_title="SRI - Autonomous AI Agent",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -214,6 +238,8 @@ nvidia_key = get_secret("NVIDIA_API_KEY")
 groq_key = get_secret("GROQ_API_KEY")
 telegram_token = get_secret("TELEGRAM_BOT_TOKEN")
 telegram_chat_id = get_secret("TELEGRAM_CHAT_ID")
+sri_auth_secret = get_secret("SRI_AUTH_SECRET") or "SRI_AUTH_SEC_948f2b7a0c91825"
+
 
 # Configure GenAI SDK if key present
 if gemini_key:
@@ -753,6 +779,21 @@ def create_project_structure(folder_name: str, file_name: str, code_content: str
         is_safe, sec_err = is_safe_sandbox_path(target_path, WORKSPACE_DIR)
         if not is_safe:
             return False, "", sec_err
+
+        # SriExecutionGate validation (WRITE_CODE)
+        rel_target = os.path.relpath(target_path, BASE_DIR).replace("\\", "/")
+        if clean_folder:
+            sri_execution_gate.add_allowed_workspace(f"workspace/{clean_folder}")
+
+        gate_ok = sri_execution_gate.run_agent_task(sri_auth_secret, "WRITE_CODE", rel_target)
+        if not gate_ok:
+            return False, "", f"SriExecutionGate Auto-Kill: Boundary or key violation ({sri_execution_gate.kill_reason})"
+
+        # SriDesignAndLaunchGuard validation if target is a frontend UI design artifact
+        if clean_file.lower().endswith((".html", ".css", ".js")):
+            design_ok = sri_design_guard.authorize_design_task(sri_auth_secret, "WRITE_CODE", clean_file)
+            if not design_ok:
+                return False, "", f"SriDesignAndLaunchGuard Auto-Kill: {sri_design_guard.kill_reason}"
 
         os.makedirs(target_dir, exist_ok=True)
 
@@ -1574,6 +1615,24 @@ def dispatch_code_edit_task(filename: str, change_request: str) -> str:
     title = f"Refine {base_display}: {change_request[:24]}..." if len(change_request) > 24 else f"Refine {base_display}: {change_request}"
     prompt = f"Modify '{clean_name}': {change_request}"
 
+    # Verify SriExecutionGate for code editing action (DEBUG_CODE)
+    rel_path = f"workspace/{clean_name}" if not clean_name.startswith("workspace/") else clean_name
+    if not sri_execution_gate.run_agent_task(sri_auth_secret, "DEBUG_CODE", rel_path):
+        print(f"🛑 [AUTO-KILL]: Code edit dispatch rejected by SriExecutionGate for {clean_name}")
+        task_id = create_task_record(
+            prompt=prompt,
+            task_type="code_edit",
+            title=title,
+            source_file=clean_name,
+            change_request=change_request
+        )
+        update_task_record(
+            task_id,
+            status="FAILED",
+            error=f"SriExecutionGate Auto-Kill: {sri_execution_gate.kill_reason}"
+        )
+        return task_id
+
     task_id = create_task_record(
         prompt=prompt,
         task_type="code_edit",
@@ -1594,8 +1653,25 @@ def dispatch_background_task(prompt: str, task_type: str = "auto", source_file: 
     if len(title) > 40:
         title = title[:40] + "..."
 
+    # Guard against locked/auto-killed gate
+    if not sri_execution_gate.is_active:
+        print(f"🛑 [GATE-LOCKED]: Background task dispatch rejected: {sri_execution_gate.kill_reason}")
+        task_id = create_task_record(
+            prompt=prompt_str,
+            task_type=task_type,
+            title=title,
+            folder_name=folder_name or "student_learning_hub"
+        )
+        update_task_record(
+            task_id,
+            status="FAILED",
+            error=f"SriExecutionGate Auto-Kill Active: {sri_execution_gate.kill_reason}"
+        )
+        return task_id
+
     # Check workspace files for auto-detection
     ws_files = get_workspace_files()
+
 
     if task_type == "code_edit" and source_file:
         return dispatch_code_edit_task(filename=source_file, change_request=prompt_str)
@@ -1637,10 +1713,499 @@ def dispatch_background_task(prompt: str, task_type: str = "auto", source_file: 
     return task_id
 
 # ==============================================================================
+# 7.5. REST API & SECURE WEBHOOK GATEWAY (SRI_AUTH_SECRET)
+# ==============================================================================
+def handle_sri_api_gateway():
+    """
+    SRI REST API & Webhook Gateway.
+    Allows remote dispatch, monitoring, metrics, voice alerts, and agent queries
+    authenticated via SRI_AUTH_SECRET (e.g. SRI_AUTH_SEC_948f2b7a0c91825).
+    """
+    try:
+        params = st.query_params
+    except Exception:
+        return
+
+    # Check if an API action or auth parameter is present
+    action = params.get("action", "") or params.get("api", "") or params.get("endpoint", "")
+    auth_provided = (
+        params.get("auth", "") or
+        params.get("api_key", "") or
+        params.get("secret", "") or
+        params.get("token", "") or
+        params.get("key", "")
+    )
+    
+    # If the user visits with valid auth in URL, authenticate their UI session
+    if auth_provided:
+        if auth_provided == sri_auth_secret or (sri_auth_secret and auth_provided.strip() == sri_auth_secret.strip()):
+            st.session_state["sri_authenticated"] = True
+
+    # If no API action is requested, continue to normal Streamlit UI
+    if not action:
+        return
+
+    # Normalize action
+    action = action.lower().strip()
+    
+    # Authenticate API request
+    is_authorized = (
+        st.session_state.get("sri_authenticated", False) or
+        bool(auth_provided and (auth_provided == sri_auth_secret or (sri_auth_secret and auth_provided.strip() == sri_auth_secret.strip())))
+    )
+    
+    now_ts = datetime.now().isoformat()
+
+    if not is_authorized:
+        response_payload = {
+            "status": "error",
+            "code": 401,
+            "error": "Unauthorized: Missing or invalid SRI authentication token.",
+            "hint": "Provide a valid secret token via '?auth=SRI_AUTH_SEC_948f2b7a0c91825'",
+            "timestamp": now_ts
+        }
+        st.error("🔒 SRI API Gateway: Unauthorized Access")
+        st.json(response_payload)
+        st.code(json.dumps(response_payload, indent=2), language="json")
+        st.stop()
+
+    # Authorized API execution
+    try:
+        if action in ["health", "ping"]:
+            db_state = load_db()
+            all_tasks = db_state.get("tasks", {})
+            running_tasks = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
+            response_payload = {
+                "status": "ok",
+                "action": "health",
+                "agent": "SRI Autonomous Agent",
+                "status_indicator": "🟢 SRI (Ready)",
+                "runtime_environment": RUNTIME_ENV["env_name"],
+                "active_running_tasks": running_tasks,
+                "total_tasks_recorded": len(all_tasks),
+                "timestamp": now_ts,
+                "api_version": "2.0-autonomous"
+            }
+
+        elif action in ["dispatch", "create", "run"]:
+            prompt = params.get("prompt", "") or params.get("task", "") or params.get("instruction", "")
+            if not prompt:
+                response_payload = {
+                    "status": "error",
+                    "code": 400,
+                    "error": "Bad Request: 'prompt' parameter is required to dispatch an agent task.",
+                    "example": "?action=dispatch&prompt=Build+a+student+dashboard&auth=SRI_AUTH_SEC_948f2b7a0c91825",
+                    "timestamp": now_ts
+                }
+            else:
+                task_type = params.get("type", "auto") or params.get("task_type", "auto")
+                folder = params.get("folder", "") or params.get("folder_name", "")
+                source_file = params.get("source_file", "") or params.get("filename", "")
+                
+                task_id = dispatch_background_task(
+                    prompt=prompt,
+                    task_type=task_type,
+                    source_file=source_file,
+                    folder_name=folder
+                )
+                
+                db_state = load_db()
+                task_data = db_state.get("tasks", {}).get(task_id, {})
+                folder_used = task_data.get("folder_name", folder)
+                
+                response_payload = {
+                    "status": "ok",
+                    "action": "dispatch",
+                    "task_id": task_id,
+                    "title": task_data.get("title", "Autonomous Task"),
+                    "task_type": task_type,
+                    "folder_name": folder_used,
+                    "state": "RUNNING",
+                    "message": "Task successfully dispatched to decoupled 24/7 background worker.",
+                    "status_url": f"?action=status&task_id={task_id}&auth={auth_provided or sri_auth_secret}",
+                    "timestamp": now_ts
+                }
+
+        elif action in ["status", "get"]:
+            task_id = params.get("task_id", "") or params.get("id", "")
+            if not task_id:
+                response_payload = {
+                    "status": "error",
+                    "code": 400,
+                    "error": "Bad Request: 'task_id' parameter is required to check task status.",
+                    "example": "?action=status&task_id=task_12345&auth=SRI_AUTH_SEC_948f2b7a0c91825",
+                    "timestamp": now_ts
+                }
+            else:
+                db_state = load_db()
+                task = db_state.get("tasks", {}).get(task_id)
+                if not task:
+                    response_payload = {
+                        "status": "error",
+                        "code": 404,
+                        "error": f"Task '{task_id}' not found in tasks database.",
+                        "timestamp": now_ts
+                    }
+                else:
+                    response_payload = {
+                        "status": "ok",
+                        "action": "status",
+                        "task_id": task_id,
+                        "title": task.get("title", ""),
+                        "status": task.get("status", "UNKNOWN"),
+                        "progress": task.get("progress", 0),
+                        "created_at": task.get("created_at", ""),
+                        "completed_at": task.get("completed_at", ""),
+                        "folder_name": task.get("folder_name", ""),
+                        "tokens_used": task.get("tokens_used", 0),
+                        "created_files": task.get("created_files", []),
+                        "summary": task.get("summary", ""),
+                        "error": task.get("error", None),
+                        "recent_logs": task.get("logs", [])[-15:],
+                        "timestamp": now_ts
+                    }
+
+        elif action in ["list", "tasks"]:
+            limit_val = params.get("limit", "25")
+            try:
+                limit = int(limit_val)
+            except Exception:
+                limit = 25
+            filter_status = str(params.get("status", "")).upper()
+            db_state = load_db()
+            all_tasks = db_state.get("tasks", {})
+            task_list = []
+            for tid, t in sorted(all_tasks.items(), key=lambda x: str(x[1].get("created_at", "")), reverse=True):
+                if filter_status and str(t.get("status", "")).upper() != filter_status:
+                    continue
+                task_list.append({
+                    "task_id": tid,
+                    "title": t.get("title", ""),
+                    "status": t.get("status", ""),
+                    "progress": t.get("progress", 0),
+                    "created_at": t.get("created_at", ""),
+                    "folder_name": t.get("folder_name", ""),
+                    "files_count": len(t.get("created_files", []))
+                })
+                if len(task_list) >= limit:
+                    break
+            response_payload = {
+                "status": "ok",
+                "action": "list",
+                "total_tasks": len(all_tasks),
+                "returned_count": len(task_list),
+                "tasks": task_list,
+                "timestamp": now_ts
+            }
+
+        elif action in ["metrics", "stats"]:
+            db_state = load_db()
+            metrics = db_state.get("metrics", {})
+            all_tasks = db_state.get("tasks", {})
+            running_tasks = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
+            response_payload = {
+                "status": "ok",
+                "action": "metrics",
+                "active_running": running_tasks,
+                "total_tasks": metrics.get("total_tasks", len(all_tasks)),
+                "completed_tasks": metrics.get("completed_tasks", 0),
+                "failed_tasks": metrics.get("failed_tasks", 0),
+                "total_tokens_estimated": metrics.get("total_tokens", 0),
+                "timestamp": now_ts
+            }
+
+        elif action in ["call", "twilio"]:
+            message = params.get("message", "") or "வணக்கம்! உங்கள் SRI ஏஜென்ட் அழைக்கிறது!"
+            ok, call_sid = make_agent_call(message=message)
+            response_payload = {
+                "status": "ok" if ok else "error",
+                "action": "call",
+                "success": ok,
+                "call_sid": call_sid if ok else None,
+                "error": None if ok else call_sid,
+                "target_number": get_secret("ADMIN_PHONE_NUMBER"),
+                "timestamp": now_ts
+            }
+
+        elif action in ["workspace", "files"]:
+            ws_files = get_workspace_files()
+            out_files = [f for f in os.listdir(OUTPUT_DIR) if os.path.isfile(os.path.join(OUTPUT_DIR, f)) and not f.endswith('.tmp')] if os.path.exists(OUTPUT_DIR) else []
+            response_payload = {
+                "status": "ok",
+                "action": "workspace",
+                "workspace_directory": WORKSPACE_DIR,
+                "workspace_files_count": len(ws_files),
+                "workspace_files": ws_files,
+                "output_directory": OUTPUT_DIR,
+                "output_files_count": len(out_files),
+                "output_files": out_files,
+                "timestamp": now_ts
+            }
+
+        elif action in ["gate_status", "gate"]:
+            response_payload = {
+                "status": "ok",
+                "action": "gate_status",
+                "agent_name": sri_execution_gate.agent_name,
+                "is_active": sri_execution_gate.is_active,
+                "kill_reason": sri_execution_gate.kill_reason,
+                "allowed_workspaces": sri_execution_gate.allowed_workspaces,
+                "allowed_actions": sri_execution_gate.allowed_actions,
+                "timestamp": now_ts
+            }
+
+        elif action in ["reset_gate", "rearm_gate"]:
+            rearm_key = auth_provided or params.get("key", "") or sri_auth_secret
+            ok = sri_execution_gate.reset_gate(rearm_key)
+            response_payload = {
+                "status": "ok" if ok else "error",
+                "action": "reset_gate",
+                "is_active": sri_execution_gate.is_active,
+                "message": "SriExecutionGate successfully re-armed." if ok else "Failed to re-arm: Invalid key.",
+                "timestamp": now_ts
+            }
+
+        elif action in ["design_guard_status", "stitch_status", "design_guard"]:
+            response_payload = {
+                "status": "ok",
+                "action": "design_guard_status",
+                "agent_name": sri_design_guard.agent_name,
+                "is_active": sri_design_guard.is_active,
+                "kill_reason": sri_design_guard.kill_reason,
+                "allowed_actions": sri_design_guard.allowed_actions,
+                "allowed_files": sri_design_guard.allowed_files,
+                "timestamp": now_ts
+            }
+
+        elif action in ["reset_design_guard", "rearm_design_guard"]:
+            rearm_key = auth_provided or params.get("key", "") or sri_auth_secret
+            ok = sri_design_guard.reset_guard(rearm_key)
+            response_payload = {
+                "status": "ok" if ok else "error",
+                "action": "reset_design_guard",
+                "is_active": sri_design_guard.is_active,
+                "message": "SriDesignAndLaunchGuard successfully re-armed." if ok else "Failed to re-arm: Invalid key.",
+                "timestamp": now_ts
+            }
+
+        elif action in ["voice_route", "route_command", "voice_dispatch"]:
+            prompt = params.get("prompt", "") or params.get("command", "") or params.get("instruction", "")
+            if not prompt:
+                response_payload = {
+                    "status": "error",
+                    "code": 400,
+                    "error": "Bad Request: 'prompt' parameter is required for voice routing.",
+                    "example": "?action=voice_route&prompt=மாணவர்+ஆப்பிற்கு+அழகான+ஹோம்+பேஜ்+டிசைன்+செய்&auth=SRI_AUTH_SEC_948f2b7a0c91825",
+                    "timestamp": now_ts
+                }
+            else:
+                ok, route_info, err_msg = sri_voice_router.validate_and_route(prompt, auth_provided or sri_auth_secret)
+                if not ok:
+                    response_payload = {
+                        "status": "error",
+                        "code": 403,
+                        "action": "voice_route",
+                        "error": err_msg,
+                        "route_info": route_info,
+                        "timestamp": now_ts
+                    }
+                else:
+                    target_folder = route_info.get("target_workspace", "").replace("workspace/", "") or "student_learning_hub"
+                    task_type = "frontend" if route_info.get("route") == "DESIGN" else ("general" if route_info.get("route") == "RESEARCH" else "auto")
+                    task_id = dispatch_background_task(
+                        prompt=prompt,
+                        task_type=task_type,
+                        folder_name=target_folder
+                    )
+                    response_payload = {
+                        "status": "ok",
+                        "action": "voice_route",
+                        "task_id": task_id,
+                        "route_detected": route_info.get("route"),
+                        "tamil_title": route_info.get("tamil_title"),
+                        "engine_selected": route_info.get("engine"),
+                        "target_workspace": route_info.get("target_workspace"),
+                        "target_files": route_info.get("target_files"),
+                        "explanation": route_info.get("explanation"),
+                        "status_url": f"?action=status&task_id={task_id}&auth={auth_provided or sri_auth_secret}",
+                        "timestamp": now_ts
+                    }
+
+        elif action in ["universal_route", "best_ai", "sri_route"]:
+            prompt = params.get("prompt", "") or params.get("command", "") or params.get("text", "")
+            if not prompt:
+                response_payload = {
+                    "status": "error",
+                    "code": 400,
+                    "error": "Bad Request: 'prompt' parameter is required for best-AI routing.",
+                    "example": "?action=universal_route&prompt=மாணவர்+பக்கத்திற்கு+புதிய+டிசைன்+செய்&auth=SRI_AUTH_SEC_948f2b7a0c91825",
+                    "timestamp": now_ts
+                }
+            else:
+                route_res = sri_universal_router.route_to_best_ai(auth_provided or sri_auth_secret, prompt)
+                if not route_res:
+                    response_payload = {
+                        "status": "error",
+                        "code": 403,
+                        "action": "universal_route",
+                        "error": f"SriUniversalVoiceRouter Auto-Kill: {sri_universal_router.kill_reason}",
+                        "timestamp": now_ts
+                    }
+                else:
+                    chosen_ai, target_file = route_res
+                    task_type = "frontend" if target_file == "index.html" else ("general" if target_file == "server.js" else "auto")
+                    task_id = dispatch_background_task(
+                        prompt=prompt,
+                        task_type=task_type,
+                        folder_name="student_learning_hub" if target_file == "index.html" else "new_project_area"
+                    )
+                    response_payload = {
+                        "status": "ok",
+                        "action": "universal_route",
+                        "task_id": task_id,
+                        "chosen_ai": chosen_ai,
+                        "target_file": target_file,
+                        "command": prompt,
+                        "status_url": f"?action=status&task_id={task_id}&auth={auth_provided or sri_auth_secret}",
+                        "timestamp": now_ts
+                    }
+
+        elif action in ["master_task", "universal_task", "master_execute"]:
+            prompt = params.get("prompt", "") or params.get("task", "") or params.get("command", "")
+            work_area = params.get("work_area", "") or params.get("area", "") or "workspace/student_learning_hub"
+            if not prompt:
+                response_payload = {
+                    "status": "error",
+                    "code": 400,
+                    "error": "Bad Request: 'prompt' parameter is required for master agent task execution.",
+                    "example": "?action=master_task&work_area=workspace/student_learning_hub&prompt=மாணவர்+பக்கத்தை+டிசைன்+செய்&auth=SRI_AUTH_SEC_948f2b7a0c91825",
+                    "timestamp": now_ts
+                }
+            else:
+                exec_res = sri_master_agent.execute_universal_task(auth_provided or sri_auth_secret, work_area, prompt)
+                if not exec_res:
+                    response_payload = {
+                        "status": "error",
+                        "code": 403,
+                        "action": "master_task",
+                        "error": f"SriUniversalMasterAgent Auto-Kill: {sri_master_agent.kill_reason}",
+                        "timestamp": now_ts
+                    }
+                else:
+                    folder_target = work_area.replace("workspace/", "").strip() or "student_learning_hub"
+                    task_type = "frontend" if "Stitch" in exec_res["ai_engine"] else ("general" if "OpenRouter" in exec_res["ai_engine"] else "auto")
+                    task_id = dispatch_background_task(
+                        prompt=prompt,
+                        task_type=task_type,
+                        folder_name=folder_target
+                    )
+                    response_payload = {
+                        "status": "ok",
+                        "action": "master_task",
+                        "task_id": task_id,
+                        "master_execution": exec_res,
+                        "status_url": f"?action=status&task_id={task_id}&auth={auth_provided or sri_auth_secret}",
+                        "timestamp": now_ts
+                    }
+
+        elif action in ["master_agent_status"]:
+            response_payload = {
+                "status": "ok",
+                "action": "master_agent_status",
+                "agent_name": sri_master_agent.agent_name,
+                "is_active": sri_master_agent.is_active,
+                "kill_reason": sri_master_agent.kill_reason,
+                "approved_work_areas": sri_master_agent.approved_work_areas,
+                "timestamp": now_ts
+            }
+
+        elif action in ["reset_master_agent", "rearm_master_agent"]:
+            rearm_key = auth_provided or params.get("key", "") or sri_auth_secret
+            ok = sri_master_agent.reset_agent(rearm_key)
+            response_payload = {
+                "status": "ok" if ok else "error",
+                "action": "reset_master_agent",
+                "is_active": sri_master_agent.is_active,
+                "message": "SriUniversalMasterAgent successfully re-armed." if ok else "Failed to re-arm: Invalid key.",
+                "timestamp": now_ts
+            }
+
+        elif action in ["add_work_area"]:
+            new_area = params.get("area", "") or params.get("path", "")
+            if not new_area:
+                response_payload = {
+                    "status": "error",
+                    "code": 400,
+                    "error": "Bad Request: 'area' parameter is required to add work area.",
+                    "timestamp": now_ts
+                }
+            else:
+                sri_master_agent.add_new_work_area(new_area)
+                response_payload = {
+                    "status": "ok",
+                    "action": "add_work_area",
+                    "added_area": new_area,
+                    "approved_work_areas": sri_master_agent.approved_work_areas,
+                    "timestamp": now_ts
+                }
+
+        elif action in ["help", "docs"]:
+            response_payload = {
+                "status": "ok",
+                "action": "help",
+                "agent": "SRI Autonomous Agent REST API Gateway",
+                "auth_method": f"Pass query parameter '?auth={sri_auth_secret}'",
+                "endpoints": {
+                    "health": f"?action=health&auth={sri_auth_secret}",
+                    "voice_route": f"?action=voice_route&prompt=<TAMIL_OR_ENGLISH_PROMPT>&auth={sri_auth_secret}",
+                    "dispatch_task": f"?action=dispatch&prompt=<PROMPT>&type=<auto|frontend|general>&folder=<FOLDER>&auth={sri_auth_secret}",
+                    "task_status": f"?action=status&task_id=<TASK_ID>&auth={sri_auth_secret}",
+                    "list_tasks": f"?action=list&limit=25&status=<RUNNING|COMPLETED|FAILED>&auth={sri_auth_secret}",
+                    "metrics": f"?action=metrics&auth={sri_auth_secret}",
+                    "twilio_voice_call": f"?action=call&message=<TEXT>&auth={sri_auth_secret}",
+                    "workspace_files": f"?action=workspace&auth={sri_auth_secret}",
+                    "gate_status": f"?action=gate_status&auth={sri_auth_secret}",
+                    "reset_gate": f"?action=reset_gate&auth={sri_auth_secret}",
+                    "design_guard_status": f"?action=design_guard_status&auth={sri_auth_secret}",
+                    "reset_design_guard": f"?action=reset_design_guard&auth={sri_auth_secret}"
+                },
+                "timestamp": now_ts
+            }
+
+
+        else:
+            response_payload = {
+                "status": "error",
+                "code": 400,
+                "error": f"Unknown action '{action}'. Supported actions: health, dispatch, status, list, metrics, call, workspace, gate_status, reset_gate, help.",
+
+                "hint": f"Check '?action=help&auth={sri_auth_secret}' for API documentation.",
+                "timestamp": now_ts
+            }
+
+    except Exception as e:
+        response_payload = {
+            "status": "error",
+            "code": 500,
+            "error": f"Internal API execution error: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }
+
+    # Render API response cleanly and stop script execution
+    st.subheader("🤖 SRI Autonomous Agent API Gateway")
+    st.json(response_payload)
+    st.code(json.dumps(response_payload, indent=2), language="json")
+    st.stop()
+
+# Evaluate incoming API requests immediately before UI rendering
+handle_sri_api_gateway()
+
+
+# ==============================================================================
 # 8. STREAMLIT UI: SIDEBAR MONITOR & CONTROLS
 # ==============================================================================
 with st.sidebar:
-    st.markdown("### ⚡ Autonomous Engine")
+    st.sidebar.markdown("### Agent Status: 🟢 SRI (Ready)")
     st.caption("24/7 Decoupled Background Task Orchestrator")
     st.markdown("---")
 
@@ -1658,6 +2223,7 @@ with st.sidebar:
     st.markdown(f"🟢 **Telegram Alerts**" if (telegram_token and telegram_chat_id) else "⚪ *Telegram Alerts (Unconfigured)*")
     st.markdown(f"🟢 **WhatsApp Webhook**" if get_secret("WHATSAPP_WEBHOOK_URL") else "⚪ *WhatsApp Webhook (Stub Ready)*")
     st.markdown(f"🟢 **Twilio Voice Call** (`ta-IN`)" if (get_secret("TWILIO_ACCOUNT_SID") and get_secret("ADMIN_PHONE_NUMBER")) else "⚪ *Twilio Voice Call (Unconfigured)*")
+    st.markdown(f"🟢 **SRI API Gateway** (`Auth: Active`)" if sri_auth_secret else "⚪ *SRI API Gateway (Unconfigured)*")
 
     st.markdown("---")
 
@@ -1704,6 +2270,112 @@ with st.sidebar:
             else:
                 st.error(f"Call failed: {res}")
 
+    st.markdown("---")
+    st.markdown("**🔌 SRI REST API Gateway & Webhook:**")
+    st.caption("Securely dispatch tasks and poll agent status programmatically.")
+    with st.expander("📖 API Documentation & cURL Snippets"):
+        st.markdown(f"**Auth Secret:** `{sri_auth_secret}`")
+        st.markdown("**Sample API Commands:**")
+        st.code(
+            f'# 1. Ping / Health Check\n'
+            f'curl "http://localhost:8501/?action=health&auth={sri_auth_secret}"\n\n'
+            f'# 2. Dispatch Autonomous Task\n'
+            f'curl "http://localhost:8501/?action=dispatch&prompt=Build+a+student+dashboard&auth={sri_auth_secret}"\n\n'
+            f'# 3. Poll Task Status\n'
+            f'curl "http://localhost:8501/?action=status&task_id=<TASK_ID>&auth={sri_auth_secret}"\n\n'
+            f'# 4. List Active Tasks\n'
+            f'curl "http://localhost:8501/?action=list&auth={sri_auth_secret}"\n\n'
+            f'# 5. Trigger Twilio Voice Alert\n'
+            f'curl "http://localhost:8501/?action=call&message=Task+Completed&auth={sri_auth_secret}"',
+            language="bash"
+        )
+
+    st.markdown("---")
+    st.markdown("**🛡️ SriExecutionGate (பாதுகாப்பு வாயில்):**")
+    if sri_execution_gate.is_active:
+        st.success("🟢 **Gate: ACTIVE (எல்லை பாதுகாப்பு உறுதி செய்யப்பட்டது)**")
+    else:
+        st.error(f"🛑 **Gate: AUTO-KILLED (முடக்கப்பட்டது)**\n\n*{sri_execution_gate.kill_reason}*")
+        if st.button("🔄 Re-Arm Gate (மீட்டெடு)", key="rearm_gate_btn", use_container_width=True):
+            if sri_execution_gate.reset_gate(sri_auth_secret):
+                st.toast("✅ SriExecutionGate மீண்டும் இயக்கப்பட்டது!")
+                st.rerun()
+
+    with st.expander("📂 Allowed Workspaces & Actions"):
+        st.markdown("**அனுமதிக்கப்பட்ட பகுதிகள் (Workspaces):**")
+        st.markdown("- 🎓 `workspace/student_learning_hub` *(மாணவர் ஆப் ஏரியா)*")
+        st.markdown("- 📁 `workspace/new_project_area` *(புதிதாகக் கொடுக்கும் ஏரியா)*")
+        st.markdown("- 🚀 `google_antigravity_space` *(ஆண்டிகிராவிட்டி ஏரியா)*")
+        st.markdown("**அனுமதிக்கப்பட்ட வேலைகள் (Actions):**")
+        st.markdown("- 📖 `READ_CODE`")
+        st.markdown("- ✍️ `WRITE_CODE`")
+        st.markdown("- 🐞 `DEBUG_CODE`")
+
+    st.markdown("---")
+    st.markdown("**🎨 SriDesignAndLaunchGuard (டிசைன் & லான்ச் கார்ட்):**")
+    if sri_design_guard.is_active:
+        st.success("🟢 **Design Guard: ACTIVE (Stitch AI & Frontend UI Secured)**")
+    else:
+        st.error(f"🛑 **Design Guard: AUTO-KILLED (முடக்கப்பட்டது)**\n\n*{sri_design_guard.kill_reason}*")
+        if st.button("🔄 Re-Arm Design Guard (மீட்டெடு)", key="rearm_design_guard_btn", use_container_width=True):
+            if sri_design_guard.reset_guard(sri_auth_secret):
+                st.toast("✅ SriDesignAndLaunchGuard மீண்டும் இயக்கப்பட்டது!")
+                st.rerun()
+
+    with st.expander("🎨 Stitch AI & Frontend Guard Rules"):
+        st.markdown("**அனுமதிக்கப்பட்ட வேலைகள் (Allowed Actions):**")
+        st.markdown("- 🎨 `FRONTEND_UI_DESIGN`")
+        st.markdown("- 🧵 `STITCH_AI_SYNC`")
+        st.markdown("- ✍️ `WRITE_CODE`")
+        st.markdown("- 🚀 `DEPLOY_APP`")
+        st.markdown("**அனுமதிக்கப்பட்ட கோப்புகள் (Allowed Files):**")
+        st.markdown("- 🌐 `index.html`")
+        st.markdown("- 🎨 `styles.css`")
+        st.markdown("- ⚡ `app.js`")
+        st.markdown("- 🖥️ `server.js`")
+
+    st.markdown("---")
+    st.markdown("**🎙️ SriUniversalVoiceRouter (குரல் வழி சிறந்த AI ரவுட்டர்):**")
+    if sri_universal_router.is_active:
+        st.success("🟢 **Universal Router: ACTIVE (Stitch AI / Gemini Pro / OpenRouter)**")
+    else:
+        st.error(f"🛑 **Universal Router: AUTO-KILLED (முடக்கப்பட்டது)**\n\n*{sri_universal_router.kill_reason}*")
+        if st.button("🔄 Re-Arm Voice Router (மீட்டெடு)", key="rearm_univ_router_btn", use_container_width=True):
+            if sri_universal_router.reset_router(sri_auth_secret):
+                st.toast("✅ SriUniversalVoiceRouter மீண்டும் இயக்கப்பட்டது!")
+                st.rerun()
+
+    with st.expander("🤖 Best AI Routing Rules (குரல் வழிகள்)"):
+        st.markdown("**1. டிசைன் / UI வேலை (Design):**")
+        st.markdown("- 🤖 **AI:** `Stitch AI (Frontend Specialist)`")
+        st.markdown("- 📂 **கோப்பு:** `index.html`")
+        st.markdown("**2. கோடிங் / லாஜிக் வேலை (Coding):**")
+        st.markdown("- 🤖 **AI:** `Gemini Pro / Antigravity Workspace`")
+        st.markdown("- 📂 **கோப்பு:** `app.js`")
+        st.markdown("**3. பொதுவான ஆய்வு / ஒப்பீடு (Research):**")
+        st.markdown("- 🤖 **AI:** `OpenRouter Multi-Model Best Selector`")
+        st.markdown("- 📂 **கோப்பு:** `server.js`")
+
+    st.markdown("---")
+    st.markdown("**👑 SriUniversalMasterAgent (மாஸ்டர் ஏஜென்ட் ஒருங்கிணைப்பு):**")
+    if sri_master_agent.is_active:
+        st.success(f"🟢 **Master Agent: ACTIVE ({sri_master_agent.agent_name})**")
+    else:
+        st.error(f"🛑 **Master Agent: AUTO-KILLED (முடக்கப்பட்டது)**\n\n*{sri_master_agent.kill_reason}*")
+        if st.button("🔄 Re-Arm Master Agent (மீட்டெடு)", key="rearm_master_agent_btn", use_container_width=True):
+            if sri_master_agent.reset_agent(sri_auth_secret):
+                st.toast("✅ SriUniversalMasterAgent மீண்டும் இயக்கப்பட்டது!")
+                st.rerun()
+
+    with st.expander("🌐 Approved Work Areas (அனுமதிக்கப்பட்ட ஏரியாக்கள்)"):
+        st.markdown("**அனுமதிக்கப்பட்ட பணிப் பகுதிகள்:**")
+        for area in sri_master_agent.approved_work_areas:
+            st.markdown(f"- 📂 `{area}`")
+        st.markdown("**AI எஞ்சின் வரைபடம்:**")
+        st.markdown("- 🎨 `UI / Frontend` -> **Stitch AI** (`STITCH_API_KEY`)")
+        st.markdown("- 💻 `Code / Deploy` -> **Gemini Pro + Antigravity** (`GEMINI_API_KEY`)")
+        st.markdown("- 🌐 `Research / Other` -> **OpenRouter** (`OPENROUTER_API_KEY`)")
+
     if st.button("🔄 Refresh View", use_container_width=True):
         st.rerun()
 
@@ -1720,7 +2392,7 @@ with st.sidebar:
 # Cloud Sleep & Persistence Recovery Hook
 restore_session_state_on_wakeup()
 
-st.markdown('<div class="main-title">🤖 Autonomous Agent & Background Task Engine</div>', unsafe_allow_html=True)
+st.title("🤖 SRI - Autonomous Agent Portal")
 st.markdown(
     '<div class="sub-title">Decoupled Background Execution • Hybrid Hosting (Local ↔ Cloud) • Safe Auto-Code Editor • 5D Task Planner</div>',
     unsafe_allow_html=True
@@ -1900,8 +2572,9 @@ def render_home_screen_artifacts_showcase():
 # Render Showcase at top of Dashboard
 render_home_screen_artifacts_showcase()
 
-tab_create, tab_editor, tab_monitor, tab_artifacts = st.tabs([
+tab_create, tab_universal, tab_editor, tab_monitor, tab_artifacts = st.tabs([
     "🚀 Launch Task",
+    "🤖 Universal Multi-AI Workspace",
     "🛠️ Auto-Code Editor",
     "📊 Live Background Monitor",
     "🎨 Artifact Previewer"
@@ -1989,16 +2662,58 @@ with tab_create:
                         st.warning(f"Voice transcription notice: {ve}")
 
     with col_v2:
+        if st.button("🎤 நேரலை மைக்ரோஃபோன் (speech_recognition ta-IN)", key="sr_mic_listen_btn", use_container_width=True):
+            cmd = sri_universal_router.listen_voice_command()
+            if cmd:
+                st.session_state["transcribed_voice_text"] = cmd
+                st.session_state["task_prompt_val"] = cmd
+                st.success(f"🎙️ குரல் பெறப்பட்டது: {cmd}")
+                sri_universal_router.route_to_best_ai(sri_auth_secret, cmd)
+                st.rerun()
+            else:
+                st.info("⚠️ நேரலை மைக்ரோஃபோன் சிக்னல் இல்லை அல்லது timeout ஆனது. இடப்பக்க பிரவுசர் ஆடியோ உள்ளீட்டைப் பயன்படுத்தலாம்.")
+
         if st.session_state.get("transcribed_voice_text"):
             st.info(f"🎙️ **Transcribed Audio & Extracted Task:**\n\n\"{st.session_state['transcribed_voice_text']}\"")
             if st.button("Apply Transcribed Text to Prompt", use_container_width=True):
                 st.session_state["task_prompt_val"] = st.session_state["transcribed_voice_text"]
                 st.rerun()
 
+
+    # SRI Master Voice Router Live Telemetry Card
+    current_prompt = st.session_state.get("task_prompt_val", "").strip() or st.session_state.get("transcribed_voice_text", "").strip()
+    if current_prompt:
+        route_info = sri_voice_router.classify_intent(current_prompt)
+        r_type = route_info["route"]
+        badge_color = "#3B82F6" if r_type == "DESIGN" else ("#10B981" if r_type == "CODING" else "#8B5CF6")
+        
+        st.markdown(
+            f"""
+            <div style="background: rgba(15, 23, 42, 0.85); border: 1.5px solid {badge_color}; border-radius: 10px; padding: 14px; margin-top: 10px; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 700; color: {badge_color}; font-size: 1.05rem;">
+                        🧭 SRI Master Voice Router: {route_info['tamil_title']}
+                    </span>
+                    <span style="background: {badge_color}; color: #ffffff; padding: 3px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 700;">
+                        {route_info['engine']}
+                    </span>
+                </div>
+                <div style="font-size: 0.85rem; color: #E2E8F0; margin-bottom: 4px;">
+                    🎯 <b>இலக்கு பகுதி (Workspace):</b> <code>{route_info['target_workspace']}</code> &nbsp;|&nbsp; 
+                    📁 <b>அனுமதிக்கப்பட்ட கோப்புகள்:</b> <code>{', '.join(route_info['target_files'])}</code>
+                </div>
+                <div style="font-size: 0.82rem; color: #94A3B8; font-style: italic;">
+                    {route_info['explanation']}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
     task_input = st.text_area(
         "Enter your task or frontend requirement:",
         value=st.session_state.get("task_prompt_val", ""),
-        placeholder="e.g. Build an executive analytics dashboard in single-file HTML or Take login.html and add password reset...",
+        placeholder="e.g. மாணவர் ஆப்பிற்கு அழகான ஹோம் பேஜ் டிசைன் செய்து கோட் எழுது or Build an analytics dashboard...",
         height=120,
         key="main_task_input_area"
     )
@@ -2008,7 +2723,7 @@ with tab_create:
         folder_input = st.text_input(
             "📁 Project Folder Name (inside workspace/):",
             value=st.session_state.get("task_folder_val", ""),
-            placeholder="e.g. student_dashboard (leave empty to auto-derive semantic name)",
+            placeholder="e.g. student_learning_hub (leave empty for auto-route)",
             key="custom_folder_name_input"
         )
         task_mode = st.radio(
@@ -2033,29 +2748,49 @@ with tab_create:
             f"**Target Workspace Path:**\n`workspace/{target_preview_folder}/index.html`"
         )
         launch_btn = st.button("⚡ Dispatch Autonomous Task", type="primary", use_container_width=True)
+        launch_voice_router_btn = st.button("🧭 Launch via SRI Master Voice Router", use_container_width=True)
 
-    if launch_btn:
+    if launch_btn or launch_voice_router_btn:
         final_prompt = task_input.strip()
         if not final_prompt:
             st.error("Please enter or record a valid task description.")
         else:
-            mapped_type = "auto"
-            if task_mode == "Frontend UI (HTML/CSS/JS)":
-                mapped_type = "frontend"
-            elif task_mode == "General Script / Automation":
-                mapped_type = "general"
-            elif task_mode == "🛠️ Modify Existing Code (Workspace)":
-                mapped_type = "code_edit"
+            if launch_voice_router_btn:
+                # Execute full validation and routing through SRI Master Voice Router
+                ok, route_info, err = sri_voice_router.validate_and_route(final_prompt, sri_auth_secret, folder_input.strip())
+                if not ok:
+                    st.error(f"🛑 Security Auto-Kill or Routing Error: {err}")
+                else:
+                    target_folder = folder_input.strip() or route_info.get("target_workspace", "").replace("workspace/", "") or "student_learning_hub"
+                    mapped_type = "frontend" if route_info.get("route") == "DESIGN" else ("general" if route_info.get("route") == "RESEARCH" else "auto")
+                    new_task_id = dispatch_background_task(
+                        prompt=final_prompt,
+                        task_type=mapped_type,
+                        source_file=selected_ws_file,
+                        folder_name=target_folder
+                    )
+                    st.success(f"🚀 Task dispatched via SRI Master Voice Router ({route_info['tamil_title']})! Task ID: `{new_task_id}`")
+                    st.toast("SRI Master Voice Router executing in background!")
+                    st.info(f"Target: `{route_info['target_workspace']}` | Allowed files: `{', '.join(route_info['target_files'])}`")
+            else:
+                mapped_type = "auto"
+                if task_mode == "Frontend UI (HTML/CSS/JS)":
+                    mapped_type = "frontend"
+                elif task_mode == "General Script / Automation":
+                    mapped_type = "general"
+                elif task_mode == "🛠️ Modify Existing Code (Workspace)":
+                    mapped_type = "code_edit"
 
-            new_task_id = dispatch_background_task(
-                prompt=final_prompt,
-                task_type=mapped_type,
-                source_file=selected_ws_file,
-                folder_name=folder_input.strip()
-            )
-            st.success(f"🚀 Task dispatched autonomously! Task ID: `{new_task_id}`")
-            st.toast("Worker thread running in background!")
-            st.info("You can safely close this browser tab, refresh, or switch tabs while the task executes in the background.")
+                new_task_id = dispatch_background_task(
+                    prompt=final_prompt,
+                    task_type=mapped_type,
+                    source_file=selected_ws_file,
+                    folder_name=folder_input.strip()
+                )
+                st.success(f"🚀 Task dispatched autonomously! Task ID: `{new_task_id}`")
+                st.toast("Worker thread running in background!")
+                st.info("You can safely close this browser tab, refresh, or switch tabs while the task executes in the background.")
+
 
     with st.expander("🔔 Instant Notification & Twilio Voice Call Test", expanded=False):
         c_call1, c_call2 = st.columns([3, 2])
@@ -2070,6 +2805,59 @@ with tab_create:
                         st.success(f"Calling your number now! Call SID: {res}")
                     else:
                         st.error(f"Call failed: {res}")
+
+# ------------------------------------------------------------------------------
+# TAB 1.5: SRI - UNIVERSAL MULTI-AI WORKSPACE
+# ------------------------------------------------------------------------------
+with tab_universal:
+    st.subheader("🤖 SRI - Universal Multi-AI Workspace")
+    st.markdown("அனைத்து AI-களையும் (Stitch AI, Google Gemini Pro, OpenRouter) ஒருங்கிணைத்து பணிபுரியும் மாஸ்டர் தளம்.")
+
+    if "sri_agent" not in st.session_state:
+        st.session_state.sri_agent = sri_master_agent
+
+    agent = st.session_state.sri_agent
+
+    # புதிய ஏரியா சேர்க்கும் வசதி
+    col_u1, col_u2 = st.columns([3, 1])
+    with col_u1:
+        new_area = st.text_input("புதிய வேலை ஏரியாவைச் சேர்க்க (உம்: workspace/my_new_app):", key="tab_u_new_area")
+    with col_u2:
+        st.write("")
+        st.write("")
+        if st.button("➕ Add Work Area", use_container_width=True, key="tab_u_add_btn") and new_area:
+            agent.add_new_work_area(new_area)
+            st.rerun()
+
+    # டாஸ்க் கொடுக்கும் பகுதி
+    selected_area = st.selectbox(
+        "வேலை செய்ய வேண்டிய ஏரியாவைத் தேர்ந்தெடுக்கவும்:",
+        agent.approved_work_areas,
+        key="tab_u_selected_area"
+    )
+    task_input_u = st.text_area(
+        "ஸ்ரீ செய்ய வேண்டிய வேலையைச் சொல்லுங்கள் (Design / Code / Deploy):",
+        placeholder="உம்: மாணவர் ஆப்பிற்கு அழகான UI டிசைன் செய்து கோட் எழுது...",
+        height=100,
+        key="tab_u_task_input"
+    )
+
+    if st.button("🚀 Run SRI Agent", type="primary", use_container_width=True, key="tab_u_run_agent_btn"):
+        if not task_input_u.strip():
+            st.warning("தயவுசெய்து ஒரு பணியை உள்ளிடவும்!")
+        else:
+            key = st.secrets.get("SRI_API_KEY", sri_auth_secret)
+            result = agent.execute_universal_task(key, selected_area, task_input_u)
+            if result:
+                st.success(f"✅ *{result['ai_engine']}* வழியாக {result['work_area']} ஏரியாவில் பணி தொடங்கப்பட்டது!")
+                folder_target = selected_area.replace("workspace/", "").strip() or "student_learning_hub"
+                task_type = "frontend" if "Stitch" in result["ai_engine"] else ("general" if "OpenRouter" in result["ai_engine"] else "auto")
+                new_tid = dispatch_background_task(
+                    prompt=task_input_u,
+                    task_type=task_type,
+                    folder_name=folder_target
+                )
+                st.info(f"🚀 பணி பின்னணி பிராசஸில் வெற்றிகரமாக இணைக்கப்பட்டது! Task ID: `{new_tid}`")
 
 # ------------------------------------------------------------------------------
 # TAB 2: AUTO-CODE EDITOR & REFINER
