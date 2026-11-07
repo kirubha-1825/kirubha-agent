@@ -8,6 +8,8 @@ import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import io
+import gc
+import shutil
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -52,6 +54,20 @@ sri_universal_router = SriUniversalVoiceRouter()
 # SRI Universal Master Agent (Multi-AI Orchestration & Approved Work Areas)
 from sri_master_agent import SriUniversalMasterAgent, execute_universal_task as _sri_execute_universal_task
 sri_master_agent = SriUniversalMasterAgent()
+
+# SRI 24/7 Cloud Multi-AI Agent & WhatsApp Notification Engine
+try:
+    from sri_cloud_agent import (
+        send_whatsapp_message,
+        background_agent_worker as sri_cloud_background_worker,
+        load_tasks as sri_cloud_load_tasks,
+        save_task_update as sri_cloud_save_task_update,
+    )
+except ImportError:
+    send_whatsapp_message = None
+    sri_cloud_background_worker = None
+    sri_cloud_load_tasks = lambda: []
+    sri_cloud_save_task_update = lambda x: None
 
 def execute_universal_task(
     input_key: str = "SRI_AUTH_SEC_948f2b7a0c91825",
@@ -164,6 +180,29 @@ CORE_PROTECTED_FILES = {
     "readme.md", "dockerfile", "packages.txt", ".gitignore", "setup.py", "test_all_models.py"
 }
 
+def cleanup_cloud_workspace(temp_folder_path: str = ""):
+    """
+    1. தற்காலிக புராஜெக்ட் கோப்புகளை நீக்குதல்
+    2. Streamlit Cache மற்றும் RAM மெமரியை சுத்தம் செய்தல்
+    """
+    # 1. தற்காலிக புராஜெக்ட் கோப்புகளை நீக்குதல்
+    if temp_folder_path and os.path.exists(temp_folder_path):
+        abs_target = os.path.abspath(temp_folder_path)
+        base_root = os.path.abspath(BASE_DIR)
+        # Protect workspace root and core application files
+        if abs_target != base_root and not any(abs_target.endswith(p) for p in CORE_PROTECTED_FILES):
+            shutil.rmtree(temp_folder_path, ignore_errors=True)
+
+    # 2. Streamlit Cache மற்றும் RAM மெமரியை சுத்தம் செய்தல்
+    try:
+        if hasattr(st, "cache_data"):
+            st.cache_data.clear()
+        if hasattr(st, "cache_resource"):
+            st.cache_resource.clear()
+    except Exception:
+        pass
+    gc.collect()
+
 def is_safe_sandbox_path(target_path: str, base_dir: str = WORKSPACE_DIR) -> tuple[bool, str]:
     """
     Strict sandbox boundary validator:
@@ -245,8 +284,8 @@ st.markdown("""
 # ==============================================================================
 # 2. SECURE SECRETS & CREDENTIALS MANAGEMENT
 # ==============================================================================
-def get_secret(key_name: str) -> str:
-    """Fetch credentials first from st.secrets, falling back to os.getenv."""
+def get_secret(key_name: str, default: str = "") -> str:
+    """Fetch credentials first from st.secrets, falling back to os.getenv, then default."""
     try:
         if hasattr(st, "secrets") and key_name in st.secrets:
             val = st.secrets[key_name]
@@ -255,7 +294,7 @@ def get_secret(key_name: str) -> str:
     except Exception:
         pass
     env_val = os.getenv(key_name)
-    return env_val.strip() if env_val else ""
+    return env_val.strip() if env_val else default
 
 gemini_key = get_secret("GEMINI_API_KEY")
 openrouter_key = get_secret("OPENROUTER_API_KEY")
@@ -559,31 +598,45 @@ def dispatch_task_alert(task_id: str, task_name: str, status: str, file_path: st
             alert_text += f"ℹ️ *Details:* {extra_details[:180]}\n"
         results["telegram"] = send_telegram_alert(alert_text)
 
-    # 2. WhatsApp Webhook Dispatch Hook (Ready for WhatsApp Cloud API / Twilio / Zapier / Make)
-    whatsapp_webhook = get_secret("WHATSAPP_WEBHOOK_URL")
-    whatsapp_token = get_secret("WHATSAPP_API_TOKEN")
-
-    if whatsapp_webhook:
-        payload = {
-            "event": "autonomous_task_alert",
-            "task_id": task_id,
-            "task_name": task_name,
-            "status": status,
-            "file_path": file_path,
-            "filename": os.path.basename(file_path) if file_path else "",
-            "details": extra_details,
-            "timestamp": datetime.now().isoformat()
-        }
-        headers = {"Content-Type": "application/json"}
-        if whatsapp_token:
-            headers["Authorization"] = f"Bearer {whatsapp_token}"
-        try:
-            res = requests.post(whatsapp_webhook, json=payload, headers=headers, timeout=8)
-            results["whatsapp"] = {"status_code": res.status_code, "response": res.text[:200]}
-        except Exception as we:
-            results["whatsapp"] = {"error": str(we)}
+    # 2. WhatsApp Dispatch Hook (Twilio WhatsApp Direct & Webhook Fallback)
+    twilio_wa_to = get_secret("MY_WHATSAPP_NUMBER")
+    if get_secret("TWILIO_ACCOUNT_SID") and get_secret("TWILIO_AUTH_TOKEN") and twilio_wa_to and send_whatsapp_message:
+        emoji_wa = "✅" if status == "COMPLETED" else "❌"
+        wa_text = (
+            f"{emoji_wa} *Autonomous Task {status}!*\n"
+            f"🆔 *Task ID:* `{task_id}`\n"
+            f"📝 *Title:* {task_name}\n"
+            f"📊 *Status:* {status}\n"
+        )
+        if extra_details:
+            wa_text += f"⚙️ *Details:* {extra_details[:140]}\n"
+        ok_wa = send_whatsapp_message(wa_text)
+        results["whatsapp"] = {"provider": "twilio_direct", "success": ok_wa}
     else:
-        results["whatsapp"] = {"status": "unconfigured", "note": "WHATSAPP_WEBHOOK_URL is not configured."}
+        whatsapp_webhook = get_secret("WHATSAPP_WEBHOOK_URL")
+        whatsapp_token = get_secret("WHATSAPP_API_TOKEN")
+
+        if whatsapp_webhook:
+            payload = {
+                "event": "autonomous_task_alert",
+                "task_id": task_id,
+                "task_name": task_name,
+                "status": status,
+                "file_path": file_path,
+                "filename": os.path.basename(file_path) if file_path else "",
+                "details": extra_details,
+                "timestamp": datetime.now().isoformat()
+            }
+            headers = {"Content-Type": "application/json"}
+            if whatsapp_token:
+                headers["Authorization"] = f"Bearer {whatsapp_token}"
+            try:
+                res = requests.post(whatsapp_webhook, json=payload, headers=headers, timeout=8)
+                results["whatsapp"] = {"status_code": res.status_code, "response": res.text[:200]}
+            except Exception as we:
+                results["whatsapp"] = {"error": str(we)}
+        else:
+            results["whatsapp"] = {"status": "unconfigured", "note": "TWILIO WhatsApp or WHATSAPP_WEBHOOK_URL not configured."}
 
     # 3. Twilio Voice Call Alert Hook
     if get_secret("TWILIO_ACCOUNT_SID") and get_secret("ADMIN_PHONE_NUMBER"):
@@ -2411,6 +2464,12 @@ with st.sidebar:
         st.toast("Database history cleared!")
         st.rerun()
 
+    if st.button("🧹 Clean Workspace Cache & RAM", use_container_width=True):
+        cloud_temp = os.path.join(tempfile.gettempdir(), "streamlit_agent")
+        cleanup_cloud_workspace(cloud_temp)
+        st.toast("🧹 தற்காலிக கோப்புகள் மற்றும் RAM மெமரி சுத்தம் செய்யப்பட்டது!")
+        st.rerun()
+
 # ==============================================================================
 # 9. MAIN DASHBOARD: HOME SCREEN SHOWCASE & TABS
 # ==============================================================================
@@ -2832,11 +2891,12 @@ with tab_create:
                         st.error(f"Call failed: {res}")
 
 # ------------------------------------------------------------------------------
-# TAB 1.5: SRI - UNIVERSAL MULTI-AI WORKSPACE
+# TAB 1.5: SRI - 24/7 CLOUD MULTI-AI AGENT & WORKSPACE
 # ------------------------------------------------------------------------------
 with tab_universal:
-    st.subheader("🤖 SRI - Universal Multi-AI Workspace")
-    st.markdown("அனைத்து AI-களையும் (Stitch AI, Google Gemini Pro, OpenRouter) ஒருங்கிணைத்து பணிபுரியும் மாஸ்டர் தளம்.")
+    st.subheader("🤖 SRI - 24/7 Cloud Multi-AI Agent")
+    st.success("🟢 Cloud Server: ACTIVE (போன்/லேப்டாப் ஆஃப் ஆனாலும் இயங்கும்)")
+    st.caption("அனைத்து AI-களையும் (Stitch AI, Google Gemini Pro, OpenRouter) ஒருங்கிணைத்து பணிபுரியும் மாஸ்டர் தளம் • Twilio WhatsApp 3-Stage Progress Updates.")
 
     if "sri_agent" not in st.session_state:
         st.session_state.sri_agent = sri_master_agent
@@ -2854,35 +2914,110 @@ with tab_universal:
             agent.add_new_work_area(new_area)
             st.rerun()
 
-    # டாஸ்க் கொடுக்கும் பகுதி
-    selected_area = st.selectbox(
-        "வேலை செய்ய வேண்டிய ஏரியாவைத் தேர்ந்தெடுக்கவும்:",
-        agent.approved_work_areas,
-        key="tab_u_selected_area"
-    )
-    task_input_u = st.text_area(
-        "ஸ்ரீ செய்ய வேண்டிய வேலையைச் சொல்லுங்கள் (Design / Code / Deploy):",
-        placeholder="உம்: மாணவர் ஆப்பிற்கு அழகான UI டிசைன் செய்து கோட் எழுது...",
-        height=100,
-        key="tab_u_task_input"
-    )
+    # டாஸ்க் படிவம் (Task Form)
+    with st.form("task_form_u"):
+        selected_area = st.selectbox(
+            "📂 எந்த ஏரியாவில் வேலை செய்ய வேண்டும்?",
+            agent.approved_work_areas,
+            key="tab_u_selected_area"
+        )
+        task_input_u = st.text_area(
+            "📝 ஸ்ரீ (SRI) செய்ய வேண்டிய டாஸ்க்கை உள்ளிடவும்:",
+            placeholder="உம்: மாணவர் ஆப்பிற்கு அழகான UI டிசைன் செய்து கோட் எழுது...",
+            height=100,
+            key="tab_u_task_input"
+        )
+        submitted = st.form_submit_button("🚀 Start Background Task", type="primary", use_container_width=True)
 
-    if st.button("🚀 Run SRI Agent", type="primary", use_container_width=True, key="tab_u_run_agent_btn"):
-        if not task_input_u.strip():
-            st.warning("தயவுசெய்து ஒரு பணியை உள்ளிடவும்!")
-        else:
-            key = st.secrets.get("SRI_API_KEY", sri_auth_secret)
-            result = agent.execute_universal_task(key, selected_area, task_input_u)
-            if result:
-                st.success(f"✅ *{result['ai_engine']}* வழியாக {result['work_area']} ஏரியாவில் பணி தொடங்கப்பட்டது!")
+        if submitted:
+            if not task_input_u.strip():
+                st.warning("⚠️ தயவுசெய்து டாஸ்க் விவரத்தை உள்ளிடவும்.")
+            else:
+                new_task_id = f"SRI-{uuid.uuid4().hex[:6].upper()}"
+                t_low = task_input_u.lower()
+                if any(w in t_low for w in ["design", "ui", "frontend", "டிசைன்", "பக்கம்"]):
+                    ai_engine = "Stitch AI (Frontend Specialist)"
+                    task_type = "frontend"
+                elif any(w in t_low for w in ["code", "app", "deploy", "கோடு", "டிப்ளாய்"]):
+                    ai_engine = "Google Gemini Pro + Antigravity"
+                    task_type = "auto"
+                else:
+                    ai_engine = "OpenRouter Multi-AI Engine"
+                    task_type = "general"
+
+                # 24/7 Cloud Background Worker with 3-stage WhatsApp updates (50%, 80%, 100%)
+                if sri_cloud_background_worker:
+                    thread = threading.Thread(
+                        target=sri_cloud_background_worker,
+                        args=(new_task_id, selected_area, task_input_u.strip(), ai_engine),
+                        daemon=False
+                    )
+                    thread.start()
+
+                # Dispatch in app pipeline as well
                 folder_target = selected_area.replace("workspace/", "").strip() or "student_learning_hub"
-                task_type = "frontend" if "Stitch" in result["ai_engine"] else ("general" if "OpenRouter" in result["ai_engine"] else "auto")
-                new_tid = dispatch_background_task(
-                    prompt=task_input_u,
+                dispatch_background_task(
+                    prompt=task_input_u.strip(),
                     task_type=task_type,
                     folder_name=folder_target
                 )
-                st.info(f"🚀 பணி பின்னணி பிராசஸில் வெற்றிகரமாக இணைக்கப்பட்டது! Task ID: `{new_tid}`")
+
+                st.toast(f"✅ டாஸ்க் தொடங்கியது! ID: {new_task_id}")
+                st.success(f"✅ *{ai_engine}* வழியாக `{selected_area}` ஏரியாவில் பணி தொடங்கப்பட்டது! Task ID: `{new_task_id}`")
+                time.sleep(1)
+                st.rerun()
+
+    # WhatsApp Alert Test Expander
+    with st.expander("📲 Twilio WhatsApp Milestone Notifications Info & Test", expanded=False):
+        c_wa1, c_wa2 = st.columns([3, 2])
+        with c_wa1:
+            st.markdown("**3 கட்ட WhatsApp மெசேஜ் அப்டேட்ஸ்:**")
+            st.markdown("- **50%:** பாதி வேலை முடிந்தது (Area & Task விவரங்களுடன்)\n- **80%:** இறுதிக்கட்ட சரிபார்ப்பு நடக்கிறது\n- **100%:** முழுமையாக முடிந்துவிட்டது!")
+            wa_from_val = str(get_secret("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886"))
+            wa_to_val = str(get_secret("MY_WHATSAPP_NUMBER", "Unconfigured"))
+            st.caption(f"Twilio WhatsApp From: `{wa_from_val}` | To: `{wa_to_val}`")
+        with c_wa2:
+            if st.button("💬 Send Test WhatsApp Message", key="tab_u_test_wa_btn", use_container_width=True):
+                if send_whatsapp_message:
+                    with st.spinner("WhatsApp மெசேஜ் அனுப்பப்படுகிறது..."):
+                        sent = send_whatsapp_message("🤖 வணக்கம்! இது SRI Cloud Agent-ன் Twilio WhatsApp சோதனைச் செய்தி (Test Message).")
+                        if sent:
+                            st.success("✅ WhatsApp மெசேஜ் வெற்றிகரமாக அனுப்பப்பட்டது!")
+                        else:
+                            st.warning("⚠️ Twilio WhatsApp அனுப்ப இயலவில்லை. TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN & MY_WHATSAPP_NUMBER சரிபார்க்கவும்.")
+                else:
+                    st.error("Twilio client கிடைக்கவில்லை.")
+
+    st.divider()
+
+    # கீழே எப்போதும் தெரியும் Task History பகுதி
+    col_th1, col_th2 = st.columns([3, 1])
+    with col_th1:
+        st.subheader("📋 தற்போதைய & முடிந்த டாஸ்க்குகள்")
+    with col_th2:
+        if st.button("🔄 Refresh", key="tab_u_hist_refresh_btn", use_container_width=True):
+            st.rerun()
+
+    tasks_list = sri_cloud_load_tasks()
+
+    if not tasks_list:
+        st.info("இதுவரை எந்த டாஸ்க்கும் கொடுக்கப்படவில்லை.")
+    else:
+        for t in tasks_list:
+            t_desc = str(t.get("task_desc", ""))
+            t_id = str(t.get("task_id", ""))
+            t_area = str(t.get("work_area", ""))
+            t_ai = str(t.get("assigned_ai", ""))
+            t_status = str(t.get("status", ""))
+            t_progress = str(t.get("progress", ""))
+            t_step = str(t.get("current_step", ""))
+            t_time = str(t.get("updated_at", ""))
+            with st.container(border=True):
+                st.markdown(f"**📝 டாஸ்க் (Task):** {t_desc}")
+                st.markdown(f"**🆔 டாஸ்க் ஐடி (Task ID):** `{t_id}`")
+                st.markdown(f"**📂 வேலை செய்யும் இடம் (Area):** `{t_area}` ({t_ai})")
+                st.markdown(f"**📊 நிலை (Status):** {t_status} ({t_progress})")
+                st.caption(f"⚙️ {t_step} | 🕒 {t_time}")
 
 # ------------------------------------------------------------------------------
 # TAB 2: AUTO-CODE EDITOR & REFINER
