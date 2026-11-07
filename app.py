@@ -1949,7 +1949,7 @@ def handle_sri_api_gateway():
                 limit = int(limit_val)
             except Exception:
                 limit = 25
-            filter_status = str(params.get("status", "")).upper()
+            filter_status = params.get("status", "").upper()
             db_state = load_db()
             all_tasks = db_state.get("tasks", {})
             task_list = []
@@ -2973,8 +2973,8 @@ with tab_universal:
         with c_wa1:
             st.markdown("**3 கட்ட WhatsApp மெசேஜ் அப்டேட்ஸ்:**")
             st.markdown("- **50%:** பாதி வேலை முடிந்தது (Area & Task விவரங்களுடன்)\n- **80%:** இறுதிக்கட்ட சரிபார்ப்பு நடக்கிறது\n- **100%:** முழுமையாக முடிந்துவிட்டது!")
-            wa_from_val = str(get_secret("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886"))
-            wa_to_val = str(get_secret("MY_WHATSAPP_NUMBER", "Unconfigured"))
+            wa_from_val = get_secret("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+            wa_to_val = get_secret("MY_WHATSAPP_NUMBER", "Unconfigured")
             st.caption(f"Twilio WhatsApp From: `{wa_from_val}` | To: `{wa_to_val}`")
         with c_wa2:
             if st.button("💬 Send Test WhatsApp Message", key="tab_u_test_wa_btn", use_container_width=True):
