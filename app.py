@@ -17,8 +17,19 @@ import streamlit.components.v1 as components
 import requests
 from dotenv import load_dotenv
 
-from openai import OpenAI
-import google.generativeai as genai
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except (ImportError, Exception):
+    OpenAI = None
+    OPENAI_AVAILABLE = False
+
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except (ImportError, Exception):
+    genai = None
+    GENAI_AVAILABLE = False
 
 # Optional Mic Recorder import with safe initialization
 try:
@@ -310,10 +321,10 @@ def is_safe_sandbox_path(
 
 # Configure Streamlit Page
 st.set_page_config(
-    page_title="SRI - Autonomous AI Agent",
+    page_title="SRI AI. — 24/7 Autonomous Agent",
     page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # Custom Styling
@@ -396,8 +407,8 @@ antigravity_webhook_url = (
 stitch_ai_api_key = get_secret("STITCH_AI_API_KEY") or "stitch_live_sec_84f9102c7b3e"
 
 
-# Configure GenAI SDK if key present
-if gemini_key:
+# Configure GenAI SDK if key present and available
+if gemini_key and genai:
     try:
         genai.configure(api_key=gemini_key)
     except Exception:
@@ -850,8 +861,8 @@ def call_gemini(prompt: str, system_instruction: str = "", task_id: str = ""):
     - Cleanly catches timeouts/quotas and triggers instant OpenRouter fallback.
     """
     global _gemini_cooldown_until
-    if not gemini_key:
-        raise ValueError("GEMINI_API_KEY is missing.")
+    if not gemini_key or not genai:
+        raise ValueError("GEMINI_API_KEY is missing or google-generativeai is unavailable.")
     if time.time() < _gemini_cooldown_until:
         cooldown_left = int(_gemini_cooldown_until - time.time())
         raise RuntimeError(
@@ -944,8 +955,8 @@ def call_openrouter(prompt: str, system_instruction: str = "", task_id: str = ""
       6. openrouter/free
     - Logs model attempts and transitions in the Execution Logs.
     """
-    if not openrouter_key:
-        raise ValueError("OPENROUTER_API_KEY is missing.")
+    if not openrouter_key or not OpenAI:
+        raise ValueError("OPENROUTER_API_KEY is missing or openai client is unavailable.")
 
     messages = []
     if system_instruction:
@@ -1025,8 +1036,8 @@ def call_openrouter(prompt: str, system_instruction: str = "", task_id: str = ""
 
 def call_nvidia(prompt: str, system_instruction: str = ""):
     """Safely wrapped NVIDIA API call."""
-    if not nvidia_key:
-        raise ValueError("NVIDIA_API_KEY is missing.")
+    if not nvidia_key or not OpenAI:
+        raise ValueError("NVIDIA_API_KEY is missing or openai client is unavailable.")
     client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=nvidia_key)
     messages = []
     if system_instruction:
@@ -1049,8 +1060,8 @@ def call_nvidia(prompt: str, system_instruction: str = ""):
 
 def call_groq(prompt: str, system_instruction: str = ""):
     """Safely wrapped Groq API call."""
-    if not groq_key:
-        raise ValueError("GROQ_API_KEY is missing.")
+    if not groq_key or not OpenAI:
+        raise ValueError("GROQ_API_KEY is missing or openai client is unavailable.")
     client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
     messages = []
     if system_instruction:
@@ -1348,8 +1359,8 @@ VOICE_TECHNICAL_PROMPT = (
 
 def _transcribe_with_whisper(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
     """Enforces Tamil transcription with language='ta' and initial technical prompt terms via Groq Whisper."""
-    if not groq_key:
-        raise ValueError("GROQ_API_KEY is not configured for Groq Whisper.")
+    if not groq_key or not OpenAI:
+        raise ValueError("GROQ_API_KEY is not configured or openai client is unavailable.")
 
     clean_mime = (mime_type or "audio/wav").split(";")[0].strip().lower()
     ext = (
@@ -1381,9 +1392,9 @@ def _transcribe_with_whisper(audio_bytes: bytes, mime_type: str = "audio/wav") -
 
 def _transcribe_with_gemini(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
     """Routes raw audio bytes directly to Gemini Multimodal Audio API for high-precision Tamil transcription & task extraction."""
-    if not gemini_key:
+    if not gemini_key or not genai:
         raise ValueError(
-            "GEMINI_API_KEY is not configured for Gemini Multimodal Audio."
+            "GEMINI_API_KEY is not configured or google-generativeai is unavailable."
         )
 
     genai.configure(api_key=gemini_key)
@@ -3023,548 +3034,828 @@ def handle_sri_api_gateway():
 handle_sri_api_gateway()
 
 
+
+
 # ==============================================================================
-# 8. STREAMLIT UI: SIDEBAR MONITOR & CONTROLS
+# 8. BESPOKE OBSIDIAN THEME, PARTICLES & STICKY HEADER
+# ==============================================================================
+
+def create_project_zip_bundle(target_path: str) -> bytes:
+    """Creates a downloadable .zip archive in-memory for a project directory or file."""
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        if os.path.isdir(target_path):
+            for root, _, files in os.walk(target_path):
+                for f in files:
+                    if f.endswith(".tmp") or f.startswith("."):
+                        continue
+                    full_p = os.path.join(root, f)
+                    rel_p = os.path.relpath(full_p, target_path)
+                    zf.write(full_p, arcname=rel_p)
+        elif os.path.isfile(target_path):
+            zf.write(target_path, arcname=os.path.basename(target_path))
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+
+def render_obsidian_theme_and_particles():
+    """Renders Deep Obsidian theme CSS and hardware-accelerated ambient ember particles."""
+    theme_html = """
+    <canvas id="obsidian-ambient-canvas"></canvas>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+
+        /* Deep Obsidian Canvas (#060709) */
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .stApp {
+            background-color: #060709 !important;
+            color: #F1F5F9 !important;
+            font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+        }
+
+        #obsidian-ambient-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0.85;
+        }
+
+        /* Container padding for edge-to-edge bespoke feel */
+        .main .block-container {
+            max-width: 100% !important;
+            padding-top: 0.6rem !important;
+            padding-bottom: 2rem !important;
+            padding-left: 1.2rem !important;
+            padding-right: 1.2rem !important;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Streamlit Header & Sidebar styling */
+        header[data-testid="stHeader"] {
+            background: transparent !important;
+            backdrop-filter: blur(8px) !important;
+        }
+
+        [data-testid="stSidebar"] {
+            background-color: #090B10 !important;
+            border-right: 1px solid #1E222B !important;
+            box-shadow: 4px 0 30px rgba(0, 0, 0, 0.8) !important;
+        }
+
+        /* 1px Hairline borders and glassmorphism on all expanders */
+        div[data-testid="stExpander"] {
+            background: rgba(12, 15, 22, 0.85) !important;
+            border: 1px solid #1E222B !important;
+            border-radius: 12px !important;
+            backdrop-filter: blur(16px) !important;
+            margin-bottom: 12px !important;
+            transition: border-color 0.25s ease, box-shadow 0.25s ease;
+        }
+
+        div[data-testid="stExpander"]:hover {
+            border-color: rgba(245, 158, 11, 0.45) !important;
+            box-shadow: 0 4px 20px rgba(245, 158, 11, 0.12);
+        }
+
+        /* Primary and secondary buttons */
+        button[kind="primary"] {
+            background: linear-gradient(135deg, #F59E0B, #D97706) !important;
+            color: #060709 !important;
+            font-weight: 700 !important;
+            border: none !important;
+            border-radius: 9999px !important;
+            box-shadow: 0 4px 18px rgba(245, 158, 11, 0.35) !important;
+            transition: all 0.2s ease !important;
+        }
+
+        button[kind="primary"]:hover {
+            box-shadow: 0 6px 26px rgba(245, 158, 11, 0.6) !important;
+            transform: translateY(-1px) !important;
+        }
+
+        button[kind="secondary"] {
+            background: rgba(18, 22, 31, 0.85) !important;
+            color: #F1F5F9 !important;
+            border: 1px solid #1E222B !important;
+            border-radius: 9999px !important;
+            transition: all 0.2s ease !important;
+        }
+
+        button[kind="secondary"]:hover {
+            border-color: #F59E0B !important;
+            color: #F59E0B !important;
+            background: rgba(245, 158, 11, 0.08) !important;
+        }
+
+        /* Text inputs and areas */
+        input[type="text"], input[type="password"], textarea, .stSelectbox > div > div {
+            background-color: #0C0F17 !important;
+            color: #FFFFFF !important;
+            border: 1px solid #1E222B !important;
+            border-radius: 10px !important;
+        }
+
+        input[type="text"]:focus, input[type="password"]:focus, textarea:focus {
+            border-color: #F59E0B !important;
+            box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25) !important;
+        }
+
+        /* Locked Sticky Top Header */
+        .sri-sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 999;
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            background: rgba(6, 7, 9, 0.88);
+            border-bottom: 1px solid #1E222B;
+            padding: 12px 20px;
+            margin-top: -0.6rem;
+            margin-left: -1.2rem;
+            margin-right: -1.2rem;
+            margin-bottom: 1.2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .brand-title {
+            font-size: 1.45rem;
+            font-weight: 900;
+            letter-spacing: -0.5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .brand-title .sri-text {
+            color: #FFFFFF;
+        }
+
+        .brand-title .ai-text {
+            background: linear-gradient(135deg, #FBBF24, #F59E0B, #D97706);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-tag {
+            font-size: 0.72rem;
+            color: #64748B;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            border-left: 1px solid #1E222B;
+            padding-left: 8px;
+            margin-left: 4px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .status-badge-active {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.35);
+            color: #34D399;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+
+        .pulse-dot {
+            width: 7px;
+            height: 7px;
+            background: #10B981;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #10B981;
+            animation: pulse-green 2s infinite;
+        }
+
+        @keyframes pulse-green {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        .drawer-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(18, 22, 31, 0.9);
+            border: 1px solid #1E222B;
+            color: #E2E8F0;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            font-weight: 600;
+        }
+
+        /* 3D Golden Neural Voice Orb */
+        .voice-orb-wrapper {
+            position: relative;
+            width: 170px;
+            height: 170px;
+            margin: 10px auto 16px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .soundwave-ring {
+            position: absolute;
+            border-radius: 50%;
+            border: 1.5px solid rgba(245, 158, 11, 0.4);
+            animation: pulse-wave 3.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+            pointer-events: none;
+        }
+        .ring-1 { width: 140px; height: 140px; animation-delay: 0s; }
+        .ring-2 { width: 180px; height: 180px; animation-delay: 1.1s; }
+        .ring-3 { width: 220px; height: 220px; animation-delay: 2.2s; }
+
+        @keyframes pulse-wave {
+            0% { transform: scale(0.65); opacity: 0.8; }
+            50% { opacity: 0.35; }
+            100% { transform: scale(1.3); opacity: 0; }
+        }
+
+        .golden-neural-orb {
+            position: relative;
+            width: 110px;
+            height: 110px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 35%, #FDE68A 0%, #F59E0B 35%, #D97706 65%, #78350F 95%, #451A03 100%);
+            box-shadow: 
+                0 0 35px rgba(245, 158, 11, 0.55),
+                0 0 70px rgba(217, 119, 6, 0.35),
+                inset -8px -8px 18px rgba(69, 26, 3, 0.8),
+                inset 8px 8px 18px rgba(254, 243, 199, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: orb-float 4s ease-in-out infinite alternate;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .golden-neural-orb:hover {
+            transform: scale(1.05);
+            box-shadow: 
+                0 0 50px rgba(245, 158, 11, 0.8),
+                0 0 95px rgba(251, 191, 36, 0.5),
+                inset -8px -8px 18px rgba(69, 26, 3, 0.8),
+                inset 8px 8px 18px rgba(254, 243, 199, 0.8);
+        }
+
+        @keyframes orb-float {
+            0% { transform: translateY(0px) scale(1); }
+            100% { transform: translateY(-6px) scale(1.02); }
+        }
+
+        .orb-core-glow {
+            position: absolute;
+            width: 45px;
+            height: 45px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(253, 230, 138, 0.5) 50%, transparent 80%);
+            filter: blur(4px);
+            animation: core-breathe 2.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes core-breathe {
+            0% { opacity: 0.45; transform: scale(0.9); }
+            100% { opacity: 0.95; transform: scale(1.15); }
+        }
+
+        .orb-icon {
+            position: relative;
+            z-index: 2;
+            font-size: 2rem;
+            filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7));
+            user-select: none;
+        }
+
+        /* Glassmorphic Cards & 1px Hairline Borders */
+        .glass-card {
+            background: rgba(12, 15, 22, 0.82);
+            border: 1px solid #1E222B;
+            border-radius: 14px;
+            padding: 18px;
+            backdrop-filter: blur(18px);
+            margin-bottom: 14px;
+        }
+
+        .glass-card:hover {
+            border-color: rgba(245, 158, 11, 0.35);
+        }
+
+        /* Terminal box */
+        .terminal-box {
+            background: #090B10;
+            color: #34D399;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem;
+            padding: 0.85rem;
+            border-radius: 8px;
+            max-height: 220px;
+            overflow-y: auto;
+            border: 1px solid #1E222B;
+            white-space: pre-wrap;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #060709;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1E222B;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #F59E0B;
+        }
+    </style>
+    <script>
+    (function() {
+        const canvas = document.getElementById('obsidian-ambient-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        let width = canvas.width = window.innerWidth;
+        let height = canvas.height = window.innerHeight;
+
+        window.addEventListener('resize', () => {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        });
+
+        const colors = ['#F59E0B', '#D97706', '#FBBF24', '#B45309'];
+        const particleCount = 42;
+        const particles = [];
+        for (let i = 0; i < particleCount; i++) {
+            particles.push({
+                x: Math.random() * width,
+                y: height + Math.random() * 200,
+                radius: Math.random() * 2.2 + 0.8,
+                color: colors[Math.floor(Math.random() * colors.length)],
+                speedY: Math.random() * 0.45 + 0.15,
+                wobbleSpeed: Math.random() * 0.015 + 0.005,
+                wobbleAmp: Math.random() * 20 + 10,
+                seed: Math.random() * 100,
+                alpha: Math.random() * 0.6 + 0.2
+            });
+        }
+
+        let time = 0;
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            time += 0.012;
+
+            // Drifting silk waves
+            ctx.save();
+            for (let w = 0; w < 3; w++) {
+                ctx.beginPath();
+                ctx.moveTo(0, height * (0.6 + w * 0.15));
+                for (let x = 0; x <= width; x += 30) {
+                    const waveY = height * (0.6 + w * 0.15) 
+                        + Math.sin(x * 0.002 + time * 0.5 + w) * 45 
+                        + Math.cos(x * 0.001 - time * 0.3) * 35;
+                    ctx.lineTo(x, waveY);
+                }
+                ctx.lineTo(width, height);
+                ctx.lineTo(0, height);
+                ctx.closePath();
+                ctx.fillStyle = `rgba(18, 22, 33, ${0.035 - w * 0.008})`;
+                ctx.fill();
+            }
+            ctx.restore();
+
+            // Amber / tiger-gold embers drifting upward
+            particles.forEach(p => {
+                p.y -= p.speedY;
+                const xOffset = Math.sin(time * p.wobbleSpeed * 50 + p.seed) * p.wobbleAmp;
+                const curX = (p.x + xOffset + width) % width;
+                const twinkle = Math.sin(time * 2 + p.seed) * 0.25 + 0.75;
+                const curAlpha = Math.max(0.1, Math.min(0.9, p.alpha * twinkle));
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(curX, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = curAlpha;
+                ctx.shadowBlur = p.radius * 4;
+                ctx.shadowColor = p.color;
+                ctx.fill();
+                ctx.restore();
+
+                if (p.y < -20) {
+                    p.y = height + Math.random() * 50;
+                    p.x = Math.random() * width;
+                }
+            });
+
+            requestAnimationFrame(animate);
+        }
+        animate();
+    })();
+    </script>
+    """
+    st.markdown(theme_html, unsafe_allow_html=True)
+
+
+def render_sticky_top_header():
+    """Renders locked sticky top header with brand, live badge, and control drawer hint."""
+    header_html = """
+    <div class="sri-sticky-header">
+        <div class="brand-title">
+            <span class="sri-text">SRI </span><span class="ai-text">AI.</span>
+            <span class="brand-tag">24/7 Cloud Autonomous Orchestrator</span>
+        </div>
+        <div class="header-actions">
+            <div class="status-badge-active">
+                <span class="pulse-dot"></span>
+                <span>● 24/7 Active</span>
+            </div>
+            <div class="drawer-pill">
+                <span>⚙️ Control Drawer</span>
+            </div>
+        </div>
+    </div>
+    """
+    st.markdown(header_html, unsafe_allow_html=True)
+
+
+# Render Ambient Obsidian Particle Engine & Sticky Top Header
+render_obsidian_theme_and_particles()
+render_sticky_top_header()
+
+
+# ==============================================================================
+# 9. COLLAPSIBLE CONTROL DRAWER / SIDEBAR (ALL 14 BACKEND CONTROLS)
 # ==============================================================================
 with st.sidebar:
-    st.sidebar.markdown("### Agent Status: 🟢 SRI (Ready)")
-    st.caption("24/7 Decoupled Background Task Orchestrator")
-    st.markdown("---")
+    st.markdown("### ⚙️ SRI Control Drawer")
+    st.caption("Organized technical controls • 24/7 Decoupled Background Engine")
 
-    # Runtime Environment & Hybrid Mode
-    st.markdown("**🌐 Environment & Runtime:**")
-    st.caption(f"🖥️ Mode: **{RUNTIME_ENV['env_name']}**")
-    st.caption(f"📁 Workspace: `{WORKSPACE_DIR}`")
-    st.caption(f"📦 Outputs: `{OUTPUT_DIR}`")
-    st.markdown("---")
-
-    # ⚙️ Agent Bridge & API Keys Configuration Inputs
-    st.markdown("**⚙️ Agent Bridge & API Keys:**")
-    bridge_key_in = st.text_input(
-        "Agent Bridge Key (Antigravity):",
-        value=st.session_state.get("cfg_agent_bridge_key", agent_bridge_api_key),
-        type="password",
-        help="API Key authorizing automatic handoff and execution by Google Antigravity Agent.",
-        key="sb_bridge_key",
-    )
-    if bridge_key_in:
-        st.session_state["cfg_agent_bridge_key"] = bridge_key_in
-        os.environ["AGENT_BRIDGE_API_KEY"] = bridge_key_in
-
-    webhook_url_in = st.text_input(
-        "Antigravity Webhook URL:",
-        value=st.session_state.get("cfg_antigravity_webhook", antigravity_webhook_url),
-        help="Endpoint for Google Antigravity Agent ingestion.",
-        key="sb_webhook_url",
-    )
-    if webhook_url_in:
-        st.session_state["cfg_antigravity_webhook"] = webhook_url_in
-        os.environ["ANTIGRAVITY_WEBHOOK_URL"] = webhook_url_in
-
-    stitch_key_in = st.text_input(
-        "Stitch AI API Key (Frontend UI):",
-        value=st.session_state.get("cfg_stitch_ai_key", stitch_ai_api_key),
-        type="password",
-        help="API Key for Stitch AI UI Design System integration.",
-        key="sb_stitch_key",
-    )
-    if stitch_key_in:
-        st.session_state["cfg_stitch_ai_key"] = stitch_key_in
-        os.environ["STITCH_AI_API_KEY"] = stitch_key_in
-
-    st.markdown("---")
-
-    # Model & Notification Status Monitor
-    st.markdown("**AI & Dispatch Status:**")
-    st.markdown(
-        f"🟢 **Tier 1: Cloud LLM** (Gemini 120s + OpenRouter Free)"
-        if (gemini_key or openrouter_key)
-        else "⚪ *Tier 1: Cloud LLM (Missing Keys)*"
-    )
-    st.markdown(
-        f"🟢 **Tier 2: Antigravity Handoff** (Bridge Key Active)"
-        if st.session_state.get("cfg_agent_bridge_key", agent_bridge_api_key)
-        else "⚪ *Tier 2: Antigravity (Key Missing)*"
-    )
-    st.markdown(
-        f"🟢 **Tier 3: Stitch AI** (Frontend UI Specialist)"
-        if st.session_state.get("cfg_stitch_ai_key", stitch_ai_api_key)
-        else "⚪ *Tier 3: Stitch AI (Key Missing)*"
-    )
-    st.markdown(
-        f"🟢 **Telegram Alerts**"
-        if (telegram_token and telegram_chat_id)
-        else "⚪ *Telegram Alerts (Unconfigured)*"
-    )
-    st.markdown(
-        f"🟢 **WhatsApp Webhook**"
-        if get_secret("WHATSAPP_WEBHOOK_URL")
-        else "⚪ *WhatsApp Webhook (Stub Ready)*"
-    )
-    st.markdown(
-        f"🟢 **Twilio Voice Call** (`ta-IN`)"
-        if (get_secret("TWILIO_ACCOUNT_SID") and get_secret("ADMIN_PHONE_NUMBER"))
-        else "⚪ *Twilio Voice Call (Unconfigured)*"
-    )
-    st.markdown(
-        f"🟢 **SRI API Gateway** (`Auth: Active`)"
-        if sri_auth_secret
-        else "⚪ *SRI API Gateway (Unconfigured)*"
-    )
-
-    st.markdown("---")
-
-    # Global Token & Task Metrics
-    db_state = load_db()
-    metrics = db_state.get("metrics", {})
-    all_tasks = db_state.get("tasks", {})
-
-    running_count = sum(1 for t in all_tasks.values() if t["status"] == "RUNNING")
-    completed_count = metrics.get("completed_tasks", 0)
-    failed_count = metrics.get("failed_tasks", 0)
-    total_tokens = metrics.get("total_tokens", 0)
-
-    st.markdown("**Live Execution Metrics:**")
-    col_m1, col_m2 = st.columns(2)
-    col_m1.metric("Active", running_count)
-    col_m2.metric("Completed", completed_count)
-
-    col_m3, col_m4 = st.columns(2)
-    col_m3.metric("Failed", failed_count)
-    col_m4.metric("Est. Tokens", f"{total_tokens:,}")
-
-    st.markdown("---")
-
-    # Storage Info
-    ws_files = get_workspace_files()
-    out_files = (
-        [
-            f
-            for f in os.listdir(OUTPUT_DIR)
-            if os.path.isfile(os.path.join(OUTPUT_DIR, f)) and not f.endswith(".tmp")
-        ]
-        if os.path.exists(OUTPUT_DIR)
-        else []
-    )
-    st.caption(f"📁 **Workspace:** `{len(ws_files)} files` in `{WORKSPACE_DIR}/`")
-    st.caption(f"📦 **Outputs:** `{len(out_files)} files` in `{OUTPUT_DIR}/`")
-
-    st.markdown("---")
-    st.markdown("**📞 Twilio Voice Call Alert:**")
-    admin_num = get_secret("ADMIN_PHONE_NUMBER")
-    if admin_num:
-        st.caption(f"Target: `{admin_num}`")
-    else:
-        st.caption(
-            "Configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, and `ADMIN_PHONE_NUMBER` in secrets."
-        )
-
-    if st.button(
-        "📞 Call Me Now (Test Agent Alert)",
-        key="sidebar_test_call_btn",
-        use_container_width=True,
-    ):
-        with st.spinner("Connecting to phone..."):
-            ok, res = make_agent_call(
-                "வணக்கம்! உங்கள் ஏஜென்ட் வெற்றிகரமாக இணைக்கப்பட்டுள்ளது."
+    # EXPANDER a) Workspaces & Background Runner
+    with st.expander("🏢 a) Workspaces & Background Runner", expanded=False):
+        st.markdown("**📂 Workspace Directory Management:**")
+        col_wa_in, col_wa_add = st.columns([3, 1])
+        with col_wa_in:
+            sb_new_work_area = st.text_input(
+                "புதிய வேலை ஏரியாவைச் சேர்க்க:",
+                placeholder="workspace/my_new_app",
+                key="sb_wa_new_input",
+                label_visibility="collapsed",
             )
-            if ok:
-                st.success(f"Calling your number now! Call SID: {res}")
-            else:
-                st.error(f"Call failed: {res}")
+        with col_wa_add:
+            if st.button("➕ Add", key="sb_wa_add_btn", use_container_width=True) and sb_new_work_area:
+                sri_master_agent.add_new_work_area(sb_new_work_area)
+                st.toast(f"Added workspace: {sb_new_work_area}")
+                st.rerun()
 
-    st.markdown("---")
-    st.markdown("**🔌 SRI REST API Gateway & Webhook:**")
-    st.caption("Securely dispatch tasks and poll agent status programmatically.")
-    with st.expander("📖 API Documentation & cURL Snippets"):
+        sb_selected_area = st.selectbox(
+            "📂 எந்த ஏரியாவில் வேலை செய்ய வேண்டும்?",
+            sri_master_agent.approved_work_areas,
+            key="sb_wa_selected_area",
+        )
+        sb_task_desc = st.text_area(
+            "📝 ஸ்ரீ (SRI) செய்ய வேண்டிய டாஸ்க்:",
+            placeholder="உம்: மாணவர் ஆப்பிற்கு அழகான UI டிசைன் செய்து கோட் எழுது...",
+            height=90,
+            key="sb_wa_task_desc",
+        )
+        if st.button("🚀 Start Background Task", key="sb_start_bg_btn", type="primary", use_container_width=True):
+            if not sb_task_desc.strip():
+                st.warning("⚠️ தயவுசெய்து டாஸ்க் விவரத்தை உள்ளிடவும்.")
+            else:
+                new_task_id = f"SRI-{uuid.uuid4().hex[:6].upper()}"
+                t_low = sb_task_desc.lower()
+                if any(w in t_low for w in ["design", "ui", "frontend", "டிசைன்", "பக்கம்"]):
+                    ai_engine = "Stitch AI (Frontend Specialist)"
+                    task_type = "frontend"
+                elif any(w in t_low for w in ["code", "app", "deploy", "கோடு", "டிப்ளாய்"]):
+                    ai_engine = "Google Gemini Pro + Antigravity"
+                    task_type = "auto"
+                else:
+                    ai_engine = "OpenRouter Multi-AI Engine"
+                    task_type = "general"
+
+                if sri_cloud_background_worker:
+                    thread = threading.Thread(
+                        target=sri_cloud_background_worker,
+                        args=(new_task_id, sb_selected_area, sb_task_desc.strip(), ai_engine),
+                        daemon=False,
+                    )
+                    thread.start()
+
+                folder_target = sb_selected_area.replace("workspace/", "").strip() or "student_learning_hub"
+                dispatch_background_task(
+                    prompt=sb_task_desc.strip(),
+                    task_type=task_type,
+                    folder_name=folder_target,
+                )
+                st.toast(f"✅ டாஸ்க் தொடங்கியது! ID: {new_task_id}")
+                st.success(f"Started via {ai_engine}! Task ID: `{new_task_id}`")
+                st.rerun()
+
+    # EXPANDER b) Voice Engine & Task Routing
+    with st.expander("🎙️ b) Voice Engine & Task Routing", expanded=False):
+        sb_voice_choice = st.radio(
+            "Transcription Route:",
+            options=[
+                "✨ Gemini Multimodal Audio (Tamil & Task Extraction)",
+                "⚡ Groq Whisper (Tamil language='ta')",
+            ],
+            index=0,
+            key="sb_voice_route_selector",
+        )
+        sb_task_classification = st.radio(
+            "Task Classification:",
+            [
+                "Auto-Detect",
+                "Frontend UI (HTML/CSS/JS)",
+                "General Script / Automation",
+                "🛠️ Modify Existing Code (Workspace)",
+            ],
+            key="sb_task_class_selector",
+        )
+        sb_folder_name = st.text_input(
+            "📁 Project Folder Name (inside workspace/):",
+            value="",
+            placeholder="student_learning_hub",
+            key="sb_folder_name_in",
+        )
+        st.caption(f"Target Path: `workspace/{sb_folder_name or '[auto_derived]'}/index.html`")
+
+        if hasattr(st, "audio_input"):
+            sb_v_audio = st.audio_input("Record voice instruction:", key="sb_voice_audio_in")
+            if sb_v_audio is not None:
+                audio_bytes = sb_v_audio.getvalue()
+                mime = sb_v_audio.type or "audio/wav"
+                engine_route = "gemini" if "Gemini" in sb_voice_choice else "whisper"
+                try:
+                    transcribed = transcribe_audio_to_text(audio_bytes, mime_type=mime, engine=engine_route)
+                    st.session_state["task_prompt_val"] = transcribed
+                    st.session_state["active_voice_query"] = transcribed
+                    st.toast("Voice instruction transcribed!")
+                    st.rerun()
+                except Exception as ve:
+                    st.warning(f"Voice notice: {ve}")
+
+        if st.button("🎤 நேரலை மைக்ரோஃபோன் (speech_recognition ta-IN)", key="sb_mic_listen_btn", use_container_width=True):
+            cmd = sri_universal_router.listen_voice_command()
+            if cmd:
+                st.session_state["task_prompt_val"] = cmd
+                st.session_state["active_voice_query"] = cmd
+                st.toast(f"குரல் பெறப்பட்டது: {cmd}")
+                st.rerun()
+
+        cur_p = st.session_state.get("task_prompt_val", "").strip()
+        if cur_p:
+            r_info = sri_voice_router.classify_intent(cur_p)
+            st.info(f"🧭 **Route:** `{r_info['route']}` | **Engine:** `{r_info['engine']}`\n**Workspace:** `{r_info['target_workspace']}`")
+
+    # EXPANDER c) Model & API Router + Execution Gate
+    with st.expander("🛡️ c) Model & API Router + Execution Gate", expanded=False):
+        st.markdown("**Execution Gate & Approval Mode:**")
+        auto_approve_toggle = st.toggle("🛡️ Execution Gate: Auto-Approve Mode", value=st.session_state.get("cfg_auto_approve", True), key="sb_auto_approve_toggle")
+        st.session_state["cfg_auto_approve"] = auto_approve_toggle
+
+        if sri_execution_gate.is_active:
+            st.success("🟢 **Execution Gate: ACTIVE (Boundary Enforced)**")
+        else:
+            st.error(f"🛑 **Gate: AUTO-KILLED**\n*{sri_execution_gate.kill_reason}*")
+            if st.button("🔄 Re-Arm Gate", key="sb_rearm_gate_btn", use_container_width=True):
+                if sri_execution_gate.reset_gate(sri_auth_secret):
+                    st.toast("Execution Gate re-armed!")
+                    st.rerun()
+
+        if sri_design_guard.is_active:
+            st.success("🟢 **Design Guard: ACTIVE (Stitch AI & UI Secured)**")
+        else:
+            st.error(f"🛑 **Design Guard: AUTO-KILLED**\n*{sri_design_guard.kill_reason}*")
+            if st.button("🔄 Re-Arm Design Guard", key="sb_rearm_dg_btn", use_container_width=True):
+                if sri_design_guard.reset_guard(sri_auth_secret):
+                    st.toast("Design Guard re-armed!")
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("**API Keys & Agent Bridge:**")
+        sb_bridge_key = st.text_input(
+            "Agent Bridge Key (Antigravity):",
+            value=st.session_state.get("cfg_agent_bridge_key", agent_bridge_api_key),
+            type="password",
+            key="sb_bridge_key_in",
+        )
+        if sb_bridge_key:
+            st.session_state["cfg_agent_bridge_key"] = sb_bridge_key
+            os.environ["AGENT_BRIDGE_API_KEY"] = sb_bridge_key
+
+        sb_webhook_url = st.text_input(
+            "Antigravity Webhook URL:",
+            value=st.session_state.get("cfg_antigravity_webhook", antigravity_webhook_url),
+            key="sb_webhook_url_in",
+        )
+        if sb_webhook_url:
+            st.session_state["cfg_antigravity_webhook"] = sb_webhook_url
+            os.environ["ANTIGRAVITY_WEBHOOK_URL"] = sb_webhook_url
+
+        sb_stitch_key = st.text_input(
+            "Stitch AI Key (Frontend UI):",
+            value=st.session_state.get("cfg_stitch_ai_key", stitch_ai_api_key),
+            type="password",
+            key="sb_stitch_key_in",
+        )
+        if sb_stitch_key:
+            st.session_state["cfg_stitch_ai_key"] = sb_stitch_key
+            os.environ["STITCH_AI_API_KEY"] = sb_stitch_key
+
+        st.caption("🟢 Tier 1: Cloud LLM (Gemini 2.5 Flash / OpenRouter Free)")
+        st.caption("🟢 Tier 2: Antigravity Handoff Bridge Active")
+        st.caption("🟢 Tier 3: Stitch AI UI Specialist Active")
+
+    # EXPANDER d) Twilio Voice Call & WhatsApp Bridge
+    with st.expander("📞 d) Twilio Voice Call & WhatsApp Bridge", expanded=False):
+        admin_num = get_secret("ADMIN_PHONE_NUMBER", "Unconfigured")
+        st.caption(f"Target Phone Number: `{admin_num}`")
+        if st.button("📞 Call Me Now (Test Agent Alert)", key="sb_call_now_btn", use_container_width=True):
+            with st.spinner("Connecting phone call..."):
+                ok, res = make_agent_call("வணக்கம்! உங்கள் ஏஜென்ட் வெற்றிகரமாக இணைக்கப்பட்டுள்ளது.")
+                if ok:
+                    st.success(f"Calling now! Call SID: {res}")
+                else:
+                    st.error(f"Call failed: {res}")
+
+        st.markdown("---")
+        wa_from = get_secret("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+        wa_to = get_secret("MY_WHATSAPP_NUMBER", "Unconfigured")
+        st.caption(f"WhatsApp From: `{wa_from}` | To: `{wa_to}`")
+        st.caption("Milestone Alerts: 50% Started • 80% Verification • 100% Finished")
+        if st.button("💬 Send Test WhatsApp Alert", key="sb_test_wa_btn", use_container_width=True):
+            if send_whatsapp_message:
+                with st.spinner("Sending WhatsApp message..."):
+                    sent = send_whatsapp_message("🤖 வணக்கம்! இது SRI Cloud Agent-ன் Twilio WhatsApp சோதனைச் செய்தி (Test Message).")
+                    if sent:
+                        st.success("WhatsApp message sent successfully!")
+                    else:
+                        st.warning("Could not send WhatsApp message. Check Twilio credentials.")
+            else:
+                st.error("Twilio WhatsApp client unavailable.")
+
+    # EXPANDER e) Safe Auto-Code Editor & File Upload
+    with st.expander("🛠️ e) Safe Auto-Code Editor & File Upload", expanded=False):
+        ws_flist = get_workspace_files()
+        sb_cur_file = st.selectbox(
+            "📁 Select file to inspect & refine:",
+            ws_flist if ws_flist else ["login.html"],
+            key="sb_cur_file_select",
+        )
+        col_seed, col_up = st.columns(2)
+        with col_seed:
+            if st.button("🌱 Seed login.html", key="sb_seed_btn", use_container_width=True):
+                sample_login_code = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Login Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-md bg-slate-800 rounded-2xl shadow-xl p-8 border border-slate-700">
+    <h1 class="text-2xl font-bold text-white mb-4">Welcome Back</h1>
+    <form class="space-y-4">
+      <input type="email" placeholder="user@example.com" class="w-full px-4 py-2 rounded bg-slate-900 border border-slate-700"/>
+      <button type="submit" class="w-full py-2 bg-indigo-600 rounded font-medium">Sign In</button>
+    </form>
+  </div>
+</body>
+</html>"""
+                with open(os.path.join(WORKSPACE_DIR, "login.html"), "w", encoding="utf-8") as sf:
+                    sf.write(sample_login_code)
+                st.toast("Seeded login.html in workspace!")
+                st.rerun()
+        with col_up:
+            sb_up_toggle = st.toggle("📤 Upload", value=False, key="sb_up_toggle")
+
+        if sb_up_toggle:
+            uploaded_file = st.file_uploader("Upload file to workspace:", type=["html", "py", "js", "css", "json", "txt"], key="sb_uploader_file")
+            if uploaded_file:
+                up_dst = os.path.join(WORKSPACE_DIR, uploaded_file.name)
+                with open(up_dst, "wb") as uf:
+                    uf.write(uploaded_file.getvalue())
+                st.success(f"Uploaded `{uploaded_file.name}` to workspace!")
+                st.rerun()
+
+        if sb_cur_file and os.path.exists(os.path.join(WORKSPACE_DIR, sb_cur_file)):
+            r_ok, r_content, _ = safe_read_code(sb_cur_file)
+            if r_ok:
+                with st.expander(f"👁️ View Original Source Code ({sb_cur_file})", expanded=False):
+                    st.code(r_content, language="html" if sb_cur_file.endswith(".html") else "text")
+
+                sb_edit_instructions = st.text_area(
+                    "Modification Instructions:",
+                    placeholder="e.g. Add dark glassmorphism and password reset modal...",
+                    key="sb_edit_instructions_in",
+                )
+                if st.button("⚡ Execute Safe Auto-Edit", key="sb_exec_auto_edit_btn", type="primary", use_container_width=True):
+                    if sb_edit_instructions.strip():
+                        new_t_id = dispatch_code_edit_task(sb_cur_file, sb_edit_instructions.strip())
+                        st.success(f"Safe Auto-Edit Dispatched! Task ID: `{new_t_id}`")
+                        st.toast("Auto-Edit running in background!")
+                        st.rerun()
+
+    # EXPANDER f) SRI REST API Gateway & Webhook
+    with st.expander("🔌 f) SRI REST API Gateway & Webhook", expanded=False):
         st.markdown(f"**Auth Secret:** `{sri_auth_secret}`")
         st.markdown("**Sample API Commands:**")
         st.code(
-            f"# 1. Ping / Health Check\n"
-            f'curl "http://localhost:8501/?action=health&auth={sri_auth_secret}"\n\n'
-            f"# 2. Dispatch Autonomous Task\n"
-            f'curl "http://localhost:8501/?action=dispatch&prompt=Build+a+student+dashboard&auth={sri_auth_secret}"\n\n'
-            f"# 3. Poll Task Status\n"
-            f'curl "http://localhost:8501/?action=status&task_id=<TASK_ID>&auth={sri_auth_secret}"\n\n'
-            f"# 4. List Active Tasks\n"
-            f'curl "http://localhost:8501/?action=list&auth={sri_auth_secret}"\n\n'
-            f"# 5. Trigger Twilio Voice Alert\n"
-            f'curl "http://localhost:8501/?action=call&message=Task+Completed&auth={sri_auth_secret}"',
+            f'# Health Check\ncurl "http://localhost:8501/?action=health&auth={sri_auth_secret}"\n\n'
+            f'# Dispatch Autonomous Task\ncurl "http://localhost:8501/?action=dispatch&prompt=Build+a+student+dashboard&auth={sri_auth_secret}"\n\n'
+            f'# Poll Task Status\ncurl "http://localhost:8501/?action=status&task_id=<TASK_ID>&auth={sri_auth_secret}"\n\n'
+            f'# Trigger Twilio Voice Alert\ncurl "http://localhost:8501/?action=call&message=Task+Completed&auth={sri_auth_secret}"',
             language="bash",
         )
 
-    st.markdown("---")
-    st.markdown("**🛡️ SriExecutionGate (பாதுகாப்பு வாயில்):**")
-    if sri_execution_gate.is_active:
-        st.success("🟢 **Gate: ACTIVE (எல்லை பாதுகாப்பு உறுதி செய்யப்பட்டது)**")
-    else:
-        st.error(
-            f"🛑 **Gate: AUTO-KILLED (முடக்கப்பட்டது)**\n\n*{sri_execution_gate.kill_reason}*"
-        )
-        if st.button(
-            "🔄 Re-Arm Gate (மீட்டெடு)", key="rearm_gate_btn", use_container_width=True
-        ):
-            if sri_execution_gate.reset_gate(sri_auth_secret):
-                st.toast("✅ SriExecutionGate மீண்டும் இயக்கப்பட்டது!")
+    # EXPANDER g) Execution Audit & Maintenance
+    with st.expander("📊 g) Execution Audit & Maintenance", expanded=False):
+        st.markdown("**Task History & Maintenance:**")
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            if st.button("🔄 Refresh View", key="sb_refresh_audit_btn", use_container_width=True):
+                st.rerun()
+        with col_g2:
+            if st.button("🗑️ Clear History", key="sb_clear_hist_btn", use_container_width=True):
+                with db_lock:
+                    with open(DB_FILE, "w", encoding="utf-8") as f:
+                        json.dump({"tasks": {}, "metrics": {"total_tasks": 0, "completed_tasks": 0, "failed_tasks": 0, "total_tokens": 0}}, f, indent=2)
+                st.toast("Tasks database history cleared!")
                 st.rerun()
 
-    with st.expander("📂 Allowed Workspaces & Actions"):
-        st.markdown("**அனுமதிக்கப்பட்ட பகுதிகள் (Workspaces):**")
-        st.markdown("- 🎓 `workspace/student_learning_hub` *(மாணவர் ஆப் ஏரியா)*")
-        st.markdown("- 📁 `workspace/new_project_area` *(புதிதாகக் கொடுக்கும் ஏரியா)*")
-        st.markdown("- 🚀 `google_antigravity_space` *(ஆண்டிகிராவிட்டி ஏரியா)*")
-        st.markdown("**அனுமதிக்கப்பட்ட வேலைகள் (Actions):**")
-        st.markdown("- 📖 `READ_CODE`")
-        st.markdown("- ✍️ `WRITE_CODE`")
-        st.markdown("- 🐞 `DEBUG_CODE`")
+        if st.button("🧹 Clear Workspace Cache & RAM", key="sb_clean_cache_btn", use_container_width=True):
+            cloud_temp = os.path.join(tempfile.gettempdir(), "streamlit_agent")
+            cleanup_cloud_workspace(cloud_temp)
+            st.toast("🧹 தற்காலிக கோப்புகள் மற்றும் RAM மெமரி சுத்தம் செய்யப்பட்டது!")
+            st.rerun()
 
-    st.markdown("---")
-    st.markdown("**🎨 SriDesignAndLaunchGuard (டிசைன் & லான்ச் கார்ட்):**")
-    if sri_design_guard.is_active:
-        st.success("🟢 **Design Guard: ACTIVE (Stitch AI & Frontend UI Secured)**")
-    else:
-        st.error(
-            f"🛑 **Design Guard: AUTO-KILLED (முடக்கப்பட்டது)**\n\n*{sri_design_guard.kill_reason}*"
-        )
-        if st.button(
-            "🔄 Re-Arm Design Guard (மீட்டெடு)",
-            key="rearm_design_guard_btn",
-            use_container_width=True,
-        ):
-            if sri_design_guard.reset_guard(sri_auth_secret):
-                st.toast("✅ SriDesignAndLaunchGuard மீண்டும் இயக்கப்பட்டது!")
-                st.rerun()
-
-    with st.expander("🎨 Stitch AI & Frontend Guard Rules"):
-        st.markdown("**அனுமதிக்கப்பட்ட வேலைகள் (Allowed Actions):**")
-        st.markdown("- 🎨 `FRONTEND_UI_DESIGN`")
-        st.markdown("- 🧵 `STITCH_AI_SYNC`")
-        st.markdown("- ✍️ `WRITE_CODE`")
-        st.markdown("- 🚀 `DEPLOY_APP`")
-        st.markdown("**அனுமதிக்கப்பட்ட கோப்புகள் (Allowed Files):**")
-        st.markdown("- 🌐 `index.html`")
-        st.markdown("- 🎨 `styles.css`")
-        st.markdown("- ⚡ `app.js`")
-        st.markdown("- 🖥️ `server.js`")
-
-    st.markdown("---")
-    st.markdown("**🎙️ SriUniversalVoiceRouter (குரல் வழி சிறந்த AI ரவுட்டர்):**")
-    if sri_universal_router.is_active:
-        st.success(
-            "🟢 **Universal Router: ACTIVE (Stitch AI / Gemini Pro / OpenRouter)**"
-        )
-    else:
-        st.error(
-            f"🛑 **Universal Router: AUTO-KILLED (முடக்கப்பட்டது)**\n\n*{sri_universal_router.kill_reason}*"
-        )
-        if st.button(
-            "🔄 Re-Arm Voice Router (மீட்டெடு)",
-            key="rearm_univ_router_btn",
-            use_container_width=True,
-        ):
-            if sri_universal_router.reset_router(sri_auth_secret):
-                st.toast("✅ SriUniversalVoiceRouter மீண்டும் இயக்கப்பட்டது!")
-                st.rerun()
-
-    with st.expander("🤖 Best AI Routing Rules (குரல் வழிகள்)"):
-        st.markdown("**1. டிசைன் / UI வேலை (Design):**")
-        st.markdown("- 🤖 **AI:** `Stitch AI (Frontend Specialist)`")
-        st.markdown("- 📂 **கோப்பு:** `index.html`")
-        st.markdown("**2. கோடிங் / லாஜிக் வேலை (Coding):**")
-        st.markdown("- 🤖 **AI:** `Gemini Pro / Antigravity Workspace`")
-        st.markdown("- 📂 **கோப்பு:** `app.js`")
-        st.markdown("**3. பொதுவான ஆய்வு / ஒப்பீடு (Research):**")
-        st.markdown("- 🤖 **AI:** `OpenRouter Multi-Model Best Selector`")
-        st.markdown("- 📂 **கோப்பு:** `server.js`")
-
-    st.markdown("---")
-    st.markdown("**👑 SriUniversalMasterAgent (மாஸ்டர் ஏஜென்ட் ஒருங்கிணைப்பு):**")
-    if sri_master_agent.is_active:
-        st.success(f"🟢 **Master Agent: ACTIVE ({sri_master_agent.agent_name})**")
-    else:
-        st.error(
-            f"🛑 **Master Agent: AUTO-KILLED (முடக்கப்பட்டது)**\n\n*{sri_master_agent.kill_reason}*"
-        )
-        if st.button(
-            "🔄 Re-Arm Master Agent (மீட்டெடு)",
-            key="rearm_master_agent_btn",
-            use_container_width=True,
-        ):
-            if sri_master_agent.reset_agent(sri_auth_secret):
-                st.toast("✅ SriUniversalMasterAgent மீண்டும் இயக்கப்பட்டது!")
-                st.rerun()
-
-    with st.expander("🌐 Approved Work Areas (அனுமதிக்கப்பட்ட ஏரியாக்கள்)"):
-        st.markdown("**அனுமதிக்கப்பட்ட பணிப் பகுதிகள்:**")
-        for area in sri_master_agent.approved_work_areas:
-            st.markdown(f"- 📂 `{area}`")
-        st.markdown("**AI எஞ்சின் வரைபடம்:**")
-        st.markdown("- 🎨 `UI / Frontend` -> **Stitch AI** (`STITCH_API_KEY`)")
-        st.markdown(
-            "- 💻 `Code / Deploy` -> **Gemini Pro + Antigravity** (`GEMINI_API_KEY`)"
-        )
-        st.markdown("- 🌐 `Research / Other` -> **OpenRouter** (`OPENROUTER_API_KEY`)")
-
-    if st.button("🔄 Refresh View", use_container_width=True):
-        st.rerun()
-
-    if st.button("🗑️ Clear Tasks History", use_container_width=True):
-        with db_lock:
-            with open(DB_FILE, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "tasks": {},
-                        "metrics": {
-                            "total_tasks": 0,
-                            "completed_tasks": 0,
-                            "failed_tasks": 0,
-                            "total_tokens": 0,
-                        },
-                    },
-                    f,
-                    indent=2,
-                )
-        st.toast("Database history cleared!")
-        st.rerun()
-
-    if st.button("🧹 Clean Workspace Cache & RAM", use_container_width=True):
-        cloud_temp = os.path.join(tempfile.gettempdir(), "streamlit_agent")
-        cleanup_cloud_workspace(cloud_temp)
-        st.toast("🧹 தற்காலிக கோப்புகள் மற்றும் RAM மெமரி சுத்தம் செய்யப்பட்டது!")
-        st.rerun()
-
-# ==============================================================================
-# 9. MAIN DASHBOARD: HOME SCREEN SHOWCASE & TABS
-# ==============================================================================
-# Cloud Sleep & Persistence Recovery Hook
-restore_session_state_on_wakeup()
-
-st.title("🤖 SRI - Autonomous Agent Portal")
-st.markdown(
-    '<div class="sub-title">Decoupled Background Execution • Hybrid Hosting (Local ↔ Cloud) • Safe Auto-Code Editor • 5D Task Planner</div>',
-    unsafe_allow_html=True,
-)
-
-
-def render_home_screen_artifacts_showcase():
-    """
-    HOME SCREEN ARTIFACT ACCESS & INSTANT DOWNLOAD:
-    At the top of the Home Screen / Main Dashboard, provides a dedicated
-    'Recent Completed Tasks & Artifacts' card view:
-    - Display: Task Name, Execution Timestamp, duration, model, and concise summary of changes made.
-    - Immediate one-click st.download_button for every generated file (HTML/Python/JS/ZIP)
-      so mobile users can download code directly to phone storage before cloud sessions expire.
-    - Collapsible st.expander showing syntax-highlighted code preview.
-    """
-    db = load_db()
-    all_tasks = db.get("tasks", {})
-    completed = [t for t in all_tasks.values() if t.get("status") == "COMPLETED"]
-    completed.sort(
-        key=lambda x: x.get("updated_at", x.get("created_at", "")), reverse=True
-    )
-
-    with st.expander(
-        "📦 Recent Completed Tasks & Artifacts (Instant Mobile & Cloud Downloads)",
-        expanded=True,
-    ):
-        st.caption(
-            "⚡ **One-Click Local/Phone Save:** Download your generated web applications and code bundles directly before cloud sessions sleep or expire."
-        )
-
-        if not completed:
-            st.info(
-                "ℹ️ No completed tasks yet. Submit a task below to generate production web applications and downloadable code bundles."
-            )
-            return
-
-        # Show up to 4 most recent completed tasks
-        recent_tasks = completed[:4]
-
-        for idx, task in enumerate(recent_tasks):
-            task_id = task.get("id", f"task_{idx}")
-            title = task.get("title", "Generated Application")
-            task_type = task.get("task_type", "frontend")
-            updated_at_raw = task.get("updated_at", "")
-            duration = task.get("duration_seconds", 0.0)
-            model_used = task.get("model_used", "AI Engine")
-            tokens = task.get("tokens", 0)
-            source_file = task.get("source_file", "")
-            change_request = task.get("change_request", "")
-            folder_name = task.get("folder_name", "")
-            workspace_file = task.get("workspace_file", "")
-            output_file = task.get("output_file", "")
-            code_content = task.get("code", "")
-
-            # Format friendly timestamp
-            time_str = ""
-            if updated_at_raw:
-                try:
-                    dt = datetime.fromisoformat(updated_at_raw)
-                    time_str = dt.strftime("%b %d, %H:%M:%S")
-                except Exception:
-                    time_str = updated_at_raw[:19].replace("T", " ")
-
-            type_label = (
-                "🛠️ Code Refinement"
-                if task_type == "code_edit"
-                else "⚡ Frontend Application"
-            )
-
-            # Concise summary
-            if task_type == "code_edit" and change_request:
-                summary = f"Refactored `{source_file}`: {change_request}"
-            elif (
-                task.get("plan_5d")
-                and isinstance(task.get("plan_5d"), dict)
-                and task["plan_5d"].get("architecture")
-            ):
-                first_line = (
-                    task["plan_5d"]["architecture"].split("\n")[0].lstrip("- #*")
-                )
-                summary = (
-                    f"Architecture: {first_line}"
-                    if first_line
-                    else "Full responsive application with schema models and interactive state logic."
-                )
-            else:
-                summary = task.get(
-                    "prompt", "Application successfully generated and validated."
-                )[:140]
-
-            # Card Header
-            st.markdown(
-                f"""
-            <div style="background: #1E293B; border: 1px solid #334155; border-radius: 10px; padding: 0.9rem; margin-top: 0.5rem; margin-bottom: 0.5rem;">
-                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
-                    <span style="font-size: 1.05rem; font-weight: 700; color: #F8FAFC;">{title}</span>
-                    <span style="font-size: 0.72rem; background: #3B82F622; color: #60A5FA; border: 1px solid #3B82F655; border-radius: 5px; padding: 2px 7px;">{type_label}</span>
-                </div>
-                <div style="font-size: 0.82rem; color: #94A3B8; margin-top: 0.3rem;">
-                    ⏱️ <b>{duration}s</b> • 📅 {time_str} • 🤖 <i>{model_used}</i> • 🪙 ~{tokens:,} Tokens
-                </div>
-                <div style="font-size: 0.85rem; color: #CBD5E1; background: #0F172A; padding: 0.5rem 0.7rem; border-radius: 6px; border-left: 3px solid #3B82F6; margin-top: 0.5rem;">
-                    <b>Summary:</b> {summary}
-                </div>
+        # Step-by-Step Task Token & Audit Log Table (Pure Python HTML - Zero Pandas Dependency)
+        db_audit = load_db()
+        all_audit_tasks = list(db_audit.get("tasks", {}).values())
+        if all_audit_tasks:
+            all_audit_tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+            table_rows_html = "".join([
+                f"""<tr style="border-bottom: 1px solid rgba(30, 34, 43, 0.7); background: rgba(12, 15, 22, 0.6);">
+                    <td style="padding: 6px 8px; font-weight: 600; font-size: 0.75rem;">{html.escape(t.get('status', ''))}</td>
+                    <td style="padding: 6px 8px; font-family: monospace; font-size: 0.72rem;">{html.escape(t.get('id', ''))}</td>
+                    <td style="padding: 6px 8px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem;">{html.escape(t.get('title', '')[:30])}</td>
+                    <td style="padding: 6px 8px; font-size: 0.75rem;">{t.get('duration_seconds', 0)}s</td>
+                    <td style="padding: 6px 8px; font-size: 0.75rem;">{html.escape(t.get('model_used', 'Pending')[:20])}</td>
+                </tr>"""
+                for t in all_audit_tasks[:10]
+            ])
+            audit_tbl_html = f"""
+            <div style="overflow-x: auto; margin-top: 10px; border-radius: 8px; border: 1px solid #1E222B;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.75rem; color: #E2E8F0; text-align: left;">
+                    <thead>
+                        <tr style="background: rgba(18, 22, 31, 0.95); border-bottom: 1px solid #1E222B; color: #F59E0B; text-transform: uppercase;">
+                            <th style="padding: 6px 8px;">Status</th>
+                            <th style="padding: 6px 8px;">ID</th>
+                            <th style="padding: 6px 8px;">Title</th>
+                            <th style="padding: 6px 8px;">Time</th>
+                            <th style="padding: 6px 8px;">Model</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {table_rows_html}
+                    </tbody>
+                </table>
             </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-            # Download & Action Buttons
-            c_dl1, c_dl2, c_dl3 = st.columns([2, 2, 3])
-
-            # Prepare downloadable bytes
-            file_bytes = None
-            dl_filename = "index.html"
-            mime_type = "text/html"
-
-            target_disk_path = None
-            if workspace_file:
-                cand = os.path.join(WORKSPACE_DIR, workspace_file)
-                if os.path.exists(cand):
-                    target_disk_path = cand
-            if not target_disk_path and output_file and os.path.exists(output_file):
-                target_disk_path = output_file
-
-            if target_disk_path and os.path.exists(target_disk_path):
-                dl_filename = os.path.basename(target_disk_path)
-                try:
-                    with open(target_disk_path, "rb") as f:
-                        file_bytes = f.read()
-                except Exception:
-                    file_bytes = code_content.encode("utf-8")
-            elif code_content:
-                ext = "html" if "<html" in code_content.lower() else "txt"
-                clean_t = re.sub(r"[^a-zA-Z0-9_\-]", "_", title.lower())[:25]
-                dl_filename = f"{clean_t}.{ext}"
-                file_bytes = code_content.encode("utf-8")
-
-            if dl_filename.endswith((".html", ".htm")):
-                mime_type = "text/html"
-            elif dl_filename.endswith(".py"):
-                mime_type = "text/x-python"
-            elif dl_filename.endswith(".js"):
-                mime_type = "application/javascript"
-            elif dl_filename.endswith(".json"):
-                mime_type = "application/json"
-            else:
-                mime_type = "text/plain"
-
-            if file_bytes:
-                with c_dl1:
-                    st.download_button(
-                        label=f"⬇️ Download {dl_filename}",
-                        data=file_bytes,
-                        file_name=dl_filename,
-                        mime=mime_type,
-                        key=f"hs_main_dl_{task_id}_{idx}",
-                        use_container_width=True,
-                    )
-
-            # ZIP Bundle creation
-            zip_bytes = None
-            zip_name = f"{folder_name or 'project'}_bundle.zip"
-            proj_dir = os.path.join(WORKSPACE_DIR, folder_name) if folder_name else None
-
-            if proj_dir and os.path.exists(proj_dir) and os.path.isdir(proj_dir):
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for root, _, files in os.walk(proj_dir):
-                        for fn in files:
-                            full_fp = os.path.join(root, fn)
-                            rel_fp = os.path.relpath(full_fp, proj_dir)
-                            zf.write(full_fp, arcname=rel_fp)
-                zip_bytes = zip_buffer.getvalue()
-            elif file_bytes:
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                    zf.writestr(dl_filename, file_bytes)
-                    if task.get("schema_data"):
-                        zf.writestr("schema.json", task["schema_data"].encode("utf-8"))
-                    if task.get("verification_report"):
-                        zf.writestr(
-                            "verification_report.md",
-                            task["verification_report"].encode("utf-8"),
-                        )
-                zip_bytes = zip_buffer.getvalue()
-
-            if zip_bytes:
-                with c_dl2:
-                    st.download_button(
-                        label="📦 Full Project (.ZIP)",
-                        data=zip_bytes,
-                        file_name=zip_name,
-                        mime="application/zip",
-                        key=f"hs_zip_dl_{task_id}_{idx}",
-                        use_container_width=True,
-                    )
-
-            # Code Preview Expander
-            preview_code = code_content or (
-                file_bytes.decode("utf-8", errors="replace") if file_bytes else ""
-            )
-            if preview_code:
-                lang = "html" if "<html" in preview_code.lower() else "python"
-                with st.expander(
-                    f"👁️ View Code Preview ({len(preview_code):,} chars)",
-                    expanded=False,
-                ):
-                    st.code(preview_code, language=lang, line_numbers=True)
-
-            st.markdown(
-                "<hr style='margin: 0.6rem 0; border-color: #33415544;'/>",
-                unsafe_allow_html=True,
-            )
+            """
+            st.markdown(audit_tbl_html, unsafe_allow_html=True)
 
 
+# ==============================================================================
+# 10. PERSISTENT LIVE TASK TRACKER (5S NON-BLOCKING FRAGMENT)
+# ==============================================================================
 @st.fragment(run_every="5s")
 def render_persistent_live_task_tracker():
     """
     PERSISTENT 'RUNNING THE TASK' LIVE TRACKER (survives browser close/reopen):
-    Loads tasks_db.json on startup.
-    If any task is RUNNING, displays an auto-refreshing (every 5s) live execution banner:
-    '🔄 Running the Task: [Task Name] — Step [X/5]: [Current Action] ([Progress]%)'
-    with step progress indicators, active engine, and elapsed execution time.
+    Loads tasks_db.json on startup. If any task is RUNNING, displays an auto-refreshing
+    live execution banner with warm amber/gold borders and step progress indicators.
     """
     db = load_db()
     all_tasks = db.get("tasks", {})
@@ -3575,22 +3866,15 @@ def render_persistent_live_task_tracker():
             key=lambda t: t.get("updated_at") or t.get("created_at") or "", reverse=True
         )
         task = running_tasks[0]
-
-        task_id = task.get("id", "task")
         title = task.get("title", "Untitled Task")
         step = task.get("current_step", 1)
         max_steps = task.get("max_steps", 5)
         progress = task.get("progress_percent", min(100, step * 20))
         current_action = task.get("current_action", "Processing task step...")
-        active_engine = (
-            task.get("active_model_or_bridge")
-            or task.get("model_used")
-            or "Tier 1: Cloud LLM (Gemini 2.5 Flash / OpenRouter)"
-        )
+        active_engine = task.get("active_model_or_bridge") or task.get("model_used") or "Tier 1: Cloud LLM (Gemini / OpenRouter)"
         folder = task.get("folder_name", "student_learning_hub")
         created_at_raw = task.get("created_at", "")
 
-        # Calculate elapsed time
         elapsed_sec = 0
         if created_at_raw:
             try:
@@ -3598,20 +3882,9 @@ def render_persistent_live_task_tracker():
                 elapsed_sec = max(0, int((datetime.now() - dt).total_seconds()))
             except Exception:
                 pass
-        elapsed_str = (
-            f"{elapsed_sec // 60}m {elapsed_sec % 60}s"
-            if elapsed_sec >= 60
-            else f"{elapsed_sec}s"
-        )
+        elapsed_str = f"{elapsed_sec // 60}m {elapsed_sec % 60}s" if elapsed_sec >= 60 else f"{elapsed_sec}s"
 
-        step_names = [
-            "1. 5D Plan",
-            "2. Schema & Init",
-            "3. Code & UI",
-            "4. Self-Verify",
-            "5. Persistence",
-        ]
-
+        step_names = ["1. 5D Plan", "2. Schema & Init", "3. Code & UI", "4. Self-Verify", "5. Persistence"]
         step_capsules_html = ""
         for i in range(1, 6):
             if i < step:
@@ -3621,14 +3894,14 @@ def render_persistent_live_task_tracker():
                 badge_color = "#34D399"
             elif i == step:
                 status_icon = "🔄"
-                badge_bg = "rgba(56, 189, 248, 0.25)"
-                badge_border = "#38BDF8"
-                badge_color = "#38BDF8"
+                badge_bg = "rgba(245, 158, 11, 0.25)"
+                badge_border = "#F59E0B"
+                badge_color = "#FBBF24"
             else:
                 status_icon = "⏳"
-                badge_bg = "rgba(51, 65, 85, 0.4)"
-                badge_border = "#475569"
-                badge_color = "#94A3B8"
+                badge_bg = "rgba(30, 34, 43, 0.6)"
+                badge_border = "#1E222B"
+                badge_color = "#64748B"
             step_capsules_html += f"""
             <span style="background: {badge_bg}; border: 1px solid {badge_border}; color: {badge_color};
                          padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">
@@ -3637,55 +3910,47 @@ def render_persistent_live_task_tracker():
             """
 
         banner_html = f"""
-        <div style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.95));
-                    border: 2px solid #38BDF8; border-radius: 14px; padding: 18px 22px; margin-bottom: 22px;
-                    box-shadow: 0 0 25px rgba(56, 189, 248, 0.25);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+        <div style="background: linear-gradient(135deg, rgba(12, 15, 22, 0.98), rgba(20, 24, 35, 0.95));
+                    border: 1.5px solid #F59E0B; border-radius: 14px; padding: 16px 20px; margin-bottom: 18px;
+                    box-shadow: 0 0 25px rgba(245, 158, 11, 0.25);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <span style="font-size: 1.4rem; display: inline-block; animation: spin-slow 4s linear infinite;">🔄</span>
-                    <span style="font-weight: 800; color: #38BDF8; font-size: 1.15rem; letter-spacing: -0.3px;">
+                    <span style="font-size: 1.3rem;">🔄</span>
+                    <span style="font-weight: 800; color: #F59E0B; font-size: 1.05rem; letter-spacing: -0.3px;">
                         Running the Task: <span style="color: #FFFFFF;">{html.escape(title[:45])}</span>
                     </span>
                 </div>
                 <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.4);
-                                 padding: 4px 14px; border-radius: 9999px; font-size: 0.85rem; font-weight: 700;">
+                    <span style="background: rgba(245, 158, 11, 0.15); color: #FBBF24; border: 1px solid rgba(245, 158, 11, 0.4);
+                                 padding: 3px 12px; border-radius: 9999px; font-size: 0.82rem; font-weight: 700;">
                         Step {step}/{max_steps} ({progress}%)
                     </span>
                     <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.3);
-                                 padding: 4px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600;">
+                                 padding: 3px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600;">
                         ● LIVE RUNNING
                     </span>
                 </div>
             </div>
 
-            <div style="color: #F1F5F9; font-size: 0.95rem; margin-bottom: 10px; font-weight: 500;">
+            <div style="color: #F1F5F9; font-size: 0.9rem; margin-bottom: 8px; font-weight: 500;">
                 ⚡ <b>Current Action:</b> <span style="color: #E2E8F0;">{html.escape(current_action)}</span>
             </div>
 
-            <!-- Visual Progress Bar -->
-            <div style="width: 100%; background: #0F172A; border-radius: 9999px; height: 10px; overflow: hidden; margin-bottom: 12px; border: 1px solid #334155;">
-                <div style="width: {progress}%; background: linear-gradient(90deg, #38BDF8, #818CF8); height: 100%; border-radius: 9999px; transition: width 0.5s ease;"></div>
+            <div style="width: 100%; background: #060709; border-radius: 9999px; height: 8px; overflow: hidden; margin-bottom: 10px; border: 1px solid #1E222B;">
+                <div style="width: {progress}%; background: linear-gradient(90deg, #F59E0B, #FBBF24); height: 100%; border-radius: 9999px; transition: width 0.5s ease;"></div>
             </div>
 
-            <!-- Steps Grid -->
-            <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
                 {step_capsules_html}
             </div>
 
-            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: #94A3B8; flex-wrap: wrap; gap: 6px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; color: #94A3B8; flex-wrap: wrap; gap: 6px;">
                 <span>🤖 <b>Engine:</b> {html.escape(active_engine)}</span>
                 <span>📁 <b>Target:</b> <code>workspace/{html.escape(folder)}</code></span>
                 <span>⏱️ <b>Elapsed:</b> {elapsed_str}</span>
-                <span style="color: #38BDF8;">🔄 Auto-refreshing live (5s poll)</span>
+                <span style="color: #F59E0B;">🔄 Live 5s sync</span>
             </div>
         </div>
-        <style>
-        @keyframes spin-slow {{
-            0% {{ transform: rotate(0deg); }}
-            100% {{ transform: rotate(360deg); }}
-        }}
-        </style>
         """
         st.markdown(banner_html, unsafe_allow_html=True)
     else:
@@ -3698,1283 +3963,357 @@ def render_persistent_live_task_tracker():
             recent = completed[0]
             st.markdown(
                 f"""
-                <div style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(16, 185, 129, 0.4);
-                            border-radius: 10px; padding: 10px 16px; margin-bottom: 18px; display: flex;
+                <div style="background: rgba(12, 15, 22, 0.85); border: 1px solid rgba(16, 185, 129, 0.35);
+                            border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; display: flex;
                             justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <span style="color: #10B981; font-size: 1.1rem;">✅</span>
-                        <span style="font-size: 0.9rem; color: #E2E8F0;">
+                        <span style="font-size: 0.88rem; color: #E2E8F0;">
                             <b>Last Task Finished:</b> {html.escape(recent.get('title', 'Task')[:45])}
                             <span style="color: #94A3B8;">({recent.get('duration_seconds', 0)}s via {recent.get('model_used', 'AI Engine')})</span>
                         </span>
                     </div>
-                    <span style="font-size: 0.8rem; color: #10B981; font-weight: 600;">Status: COMPLETED (100%)</span>
+                    <span style="font-size: 0.78rem; color: #10B981; font-weight: 600;">Status: COMPLETED (100%)</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
 
-# Render Persistent Live Task Tracker at top of Dashboard (Auto-refresh every 5s)
-render_persistent_live_task_tracker()
+# ==============================================================================
+# 11. RESPONSIVE SPATIAL MAIN SCREEN: DESKTOP 3-ZONE GRID & MOBILE 2-PAGE SWITCHER
+# ==============================================================================
+restore_session_state_on_wakeup()
 
-# Render Showcase at top of Dashboard
-render_home_screen_artifacts_showcase()
+# Dynamic Greeting based on time of day
+current_hour = datetime.now().hour
+greeting_period = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 17 else "Good evening")
+user_greeting = f"{greeting_period}, Kirubha — Agent Live"
 
-tab_create, tab_voice_chat, tab_universal, tab_editor, tab_monitor, tab_artifacts = (
-    st.tabs(
-        [
-            "🚀 Launch Task",
-            "🎙️ Talk to My Agent (Live Voice Assistant)",
-            "🤖 Universal Multi-AI Workspace",
-            "🛠️ Auto-Code Editor",
-            "📊 Live Background Monitor",
-            "🎨 Artifact Previewer",
-        ]
+# View Switcher for Mobile (<900px) & Desktop (>=900px)
+mobile_nav_col1, mobile_nav_col2 = st.columns([3, 1])
+with mobile_nav_col1:
+    view_selection = st.radio(
+        "Navigation View",
+        options=["🖥️ 3-Zone Desktop Grid", "🎙️ Agent Hub (Mobile)", "👁️ Project View (Mobile)"],
+        index=0,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="sri_spatial_view_mode",
     )
-)
+with mobile_nav_col2:
+    st.caption("📱 Mobile & Desktop Responsive")
+
 
 # ------------------------------------------------------------------------------
-# TAB 1: LAUNCH TASK
+# RENDER ZONE 1: GREETING & RUNTIME METRICS
 # ------------------------------------------------------------------------------
-with tab_create:
-    st.subheader("Submit an Autonomous Task")
+def render_zone_left():
     st.markdown(
-        "🧠 **5-Dimensional Reasoning Engine:** *Architecture (UI/Logic/Storage) • User Experience (Mobile-First) • Resilience (Error Handling) • Efficiency • Reflection Checklist*"
-    )
-    st.caption(
-        "⚡ **Decomposed Execution Loop:** Step 1: Initialize Schema & Data in `workspace/` ➔ Step 2: Implement Core Logic & Interface ➔ Step 3: Self-Verification & Final Atomic Persistence"
-    )
-
-    # Preset Quick Prompts
-    st.markdown("**💡 Quick Templates:**")
-    p_cols = st.columns(4)
-    if p_cols[0].button("💻 Student Dashboard", use_container_width=True):
-        st.session_state["task_prompt_val"] = (
-            "Build a responsive, modern student dashboard in HTML/CSS/JS with course progress charts, assignment tracker, and dark mode toggle."
-        )
-        st.session_state["task_folder_val"] = "student_dashboard"
-    if p_cols[1].button("🔐 SaaS Auth Portal", use_container_width=True):
-        st.session_state["task_prompt_val"] = (
-            "Create a sleek, modern SaaS Login and Registration page with tab switching, password strength meter, and social login buttons."
-        )
-        st.session_state["task_folder_val"] = "saas_auth"
-    if p_cols[2].button("📋 Kanban Board", use_container_width=True):
-        st.session_state["task_prompt_val"] = (
-            "Build an interactive Kanban board UI in single-file HTML/CSS/JS with drag-and-drop task cards, category columns, and task addition modal."
-        )
-        st.session_state["task_folder_val"] = "kanban_board"
-    if p_cols[3].button("🔑 Refine login.html", use_container_width=True):
-        st.session_state["task_prompt_val"] = (
-            "Take login.html and add password reset modal, remember-me checkbox, and social authentication buttons."
-        )
-        st.session_state["task_folder_val"] = ""
-
-    # Voice Input Component
-    st.markdown("##### 🎙️ Voice Input (Tamil & Bilingual Voice Instructions):")
-    v_opt_col1, v_opt_col2 = st.columns([3, 2])
-    with v_opt_col1:
-        voice_engine_choice = st.radio(
-            "Transcription Route:",
-            options=[
-                "✨ Gemini Multimodal Audio (High-Precision Tamil & Task Extraction)",
-                "⚡ Groq Whisper (Tamil language='ta' with Technical Prompt)",
-            ],
-            index=0,
-            horizontal=True,
-            key="voice_engine_route_selector",
-        )
-    with v_opt_col2:
-        if "Gemini" in voice_engine_choice:
-            st.caption(
-                "🎯 **Gemini Multimodal**: Raw audio bytes routed directly to Gemini for nuanced Tamil transcription and complete task specification extraction."
-            )
-        else:
-            st.caption(
-                "🚀 **Groq Whisper**: Fast transcription with `language='ta'` guided by terms: *Python, HTML, CSS, JavaScript, Student Learning App, UI, Workspace*."
-            )
-
-    col_v1, col_v2 = st.columns([3, 2])
-    with col_v1:
-        v_audio = None
-        audio_mime = "audio/wav"
-        if hasattr(st, "audio_input"):
-            v_audio_file = st.audio_input(
-                "Record voice instruction in Tamil or English:", key="voice_audio_input"
-            )
-            if v_audio_file is not None:
-                v_audio = v_audio_file.getvalue()
-                audio_mime = v_audio_file.type or "audio/wav"
-        elif MIC_RECORDER_AVAILABLE and mic_recorder:
-            rec_result = mic_recorder(
-                start_prompt="🔴 Click to Record Voice",
-                stop_prompt="⏹️ Stop Recording",
-                key="voice_recorder_mic",
-            )
-            if rec_result and "bytes" in rec_result and rec_result["bytes"]:
-                v_audio = rec_result["bytes"]
-                audio_mime = "audio/wav"
-
-        if v_audio:
-            import hashlib
-
-            audio_hash = hashlib.md5(v_audio).hexdigest()
-            if st.session_state.get("prev_audio_hash") != audio_hash:
-                engine_key = "gemini" if "Gemini" in voice_engine_choice else "whisper"
-                engine_display = (
-                    "Gemini Multimodal Audio API"
-                    if engine_key == "gemini"
-                    else "Groq Whisper (ta)"
-                )
-                with st.spinner(
-                    f"🎙️ Processing voice instruction via {engine_display}..."
-                ):
-                    try:
-                        transcribed_text = transcribe_audio_to_text(
-                            v_audio, mime_type=audio_mime, engine=engine_key
-                        )
-                        st.session_state["prev_audio_hash"] = audio_hash
-                        st.session_state["transcribed_voice_text"] = transcribed_text
-                        st.session_state["task_prompt_val"] = transcribed_text
-                        st.toast(
-                            f"Voice instruction transcribed successfully via {engine_display}!"
-                        )
-                    except Exception as ve:
-                        st.warning(f"Voice transcription notice: {ve}")
-
-    with col_v2:
-        if st.button(
-            "🎤 நேரலை மைக்ரோஃபோன் (speech_recognition ta-IN)",
-            key="sr_mic_listen_btn",
-            use_container_width=True,
-        ):
-            cmd = sri_universal_router.listen_voice_command()
-            if cmd:
-                st.session_state["transcribed_voice_text"] = cmd
-                st.session_state["task_prompt_val"] = cmd
-                st.success(f"🎙️ குரல் பெறப்பட்டது: {cmd}")
-                sri_universal_router.route_to_best_ai(sri_auth_secret, cmd)
-                st.rerun()
-            else:
-                st.info(
-                    "⚠️ நேரலை மைக்ரோஃபோன் சிக்னல் இல்லை அல்லது timeout ஆனது. இடப்பக்க பிரவுசர் ஆடியோ உள்ளீட்டைப் பயன்படுத்தலாம்."
-                )
-
-        if st.session_state.get("transcribed_voice_text"):
-            st.info(
-                f"🎙️ **Transcribed Audio & Extracted Task:**\n\n\"{st.session_state['transcribed_voice_text']}\""
-            )
-            if st.button("Apply Transcribed Text to Prompt", use_container_width=True):
-                st.session_state["task_prompt_val"] = st.session_state[
-                    "transcribed_voice_text"
-                ]
-                st.rerun()
-
-    # SRI Master Voice Router Live Telemetry Card
-    current_prompt = (
-        st.session_state.get("task_prompt_val", "").strip()
-        or st.session_state.get("transcribed_voice_text", "").strip()
-    )
-    if current_prompt:
-        route_info = sri_voice_router.classify_intent(current_prompt)
-        r_type = route_info["route"]
-        badge_color = (
-            "#3B82F6"
-            if r_type == "DESIGN"
-            else ("#10B981" if r_type == "CODING" else "#8B5CF6")
-        )
-
-        st.markdown(
-            f"""
-            <div style="background: rgba(15, 23, 42, 0.85); border: 1.5px solid {badge_color}; border-radius: 10px; padding: 14px; margin-top: 10px; margin-bottom: 12px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="font-weight: 700; color: {badge_color}; font-size: 1.05rem;">
-                        🧭 SRI Master Voice Router: {route_info['tamil_title']}
-                    </span>
-                    <span style="background: {badge_color}; color: #ffffff; padding: 3px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 700;">
-                        {route_info['engine']}
-                    </span>
-                </div>
-                <div style="font-size: 0.85rem; color: #E2E8F0; margin-bottom: 4px;">
-                    🎯 <b>இலக்கு பகுதி (Workspace):</b> <code>{route_info['target_workspace']}</code> &nbsp;|&nbsp; 
-                    📁 <b>அனுமதிக்கப்பட்ட கோப்புகள்:</b> <code>{', '.join(route_info['target_files'])}</code>
-                </div>
-                <div style="font-size: 0.82rem; color: #94A3B8; font-style: italic;">
-                    {route_info['explanation']}
-                </div>
+        f"""
+        <div class="glass-card">
+            <div style="font-size: 1.15rem; font-weight: 800; color: #FFFFFF; margin-bottom: 2px;">
+                {html.escape(user_greeting)}
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    task_input = st.text_area(
-        "Enter your task or frontend requirement:",
-        value=st.session_state.get("task_prompt_val", ""),
-        placeholder="e.g. மாணவர் ஆப்பிற்கு அழகான ஹோம் பேஜ் டிசைன் செய்து கோட் எழுது or Build an analytics dashboard...",
-        height=120,
-        key="main_task_input_area",
-    )
-
-    col_opt1, col_opt2 = st.columns([3, 2])
-    with col_opt1:
-        folder_input = st.text_input(
-            "📁 Project Folder Name (inside workspace/):",
-            value=st.session_state.get("task_folder_val", ""),
-            placeholder="e.g. student_learning_hub (leave empty for auto-route)",
-            key="custom_folder_name_input",
-        )
-        task_mode = st.radio(
-            "Task Classification:",
-            [
-                "Auto-Detect",
-                "Frontend UI (HTML/CSS/JS)",
-                "General Script / Automation",
-                "🛠️ Modify Existing Code (Workspace)",
-            ],
-            horizontal=True,
-        )
-        selected_ws_file = ""
-        if task_mode == "🛠️ Modify Existing Code (Workspace)":
-            ws_choices = get_workspace_files()
-            if ws_choices:
-                selected_ws_file = st.selectbox(
-                    "Select file from workspace to modify:", ws_choices
-                )
-                st.caption(
-                    f"🛡️ Original file `workspace/{selected_ws_file}` will be read and preserved. Updated version saves to `outputs/`."
-                )
-            else:
-                st.warning(
-                    f"No files found in `{WORKSPACE_DIR}/`. Please upload or seed one in the Auto-Code Editor tab."
-                )
-
-    with col_opt2:
-        st.write("")
-        st.write("")
-        target_preview_folder = (
-            folder_input.strip() if folder_input.strip() else "[auto_derived_project]"
-        )
-        st.markdown(
-            f"**Target Workspace Path:**\n`workspace/{target_preview_folder}/index.html`"
-        )
-        launch_btn = st.button(
-            "⚡ Dispatch Autonomous Task", type="primary", use_container_width=True
-        )
-        launch_voice_router_btn = st.button(
-            "🧭 Launch via SRI Master Voice Router", use_container_width=True
-        )
-
-    if launch_btn or launch_voice_router_btn:
-        final_prompt = task_input.strip()
-        if not final_prompt:
-            st.error("Please enter or record a valid task description.")
-        else:
-            if launch_voice_router_btn:
-                # Execute full validation and routing through SRI Master Voice Router
-                ok, route_info, err = sri_voice_router.validate_and_route(
-                    final_prompt, sri_auth_secret, folder_input.strip()
-                )
-                if not ok:
-                    st.error(f"🛑 Security Auto-Kill or Routing Error: {err}")
-                else:
-                    target_folder = (
-                        folder_input.strip()
-                        or route_info.get("target_workspace", "").replace(
-                            "workspace/", ""
-                        )
-                        or "student_learning_hub"
-                    )
-                    mapped_type = (
-                        "frontend"
-                        if route_info.get("route") == "DESIGN"
-                        else (
-                            "general"
-                            if route_info.get("route") == "RESEARCH"
-                            else "auto"
-                        )
-                    )
-                    new_task_id = dispatch_background_task(
-                        prompt=final_prompt,
-                        task_type=mapped_type,
-                        source_file=selected_ws_file,
-                        folder_name=target_folder,
-                    )
-                    st.success(
-                        f"🚀 Task dispatched via SRI Master Voice Router ({route_info['tamil_title']})! Task ID: `{new_task_id}`"
-                    )
-                    st.toast("SRI Master Voice Router executing in background!")
-                    st.info(
-                        f"Target: `{route_info['target_workspace']}` | Allowed files: `{', '.join(route_info['target_files'])}`"
-                    )
-            else:
-                mapped_type = "auto"
-                if task_mode == "Frontend UI (HTML/CSS/JS)":
-                    mapped_type = "frontend"
-                elif task_mode == "General Script / Automation":
-                    mapped_type = "general"
-                elif task_mode == "🛠️ Modify Existing Code (Workspace)":
-                    mapped_type = "code_edit"
-
-                new_task_id = dispatch_background_task(
-                    prompt=final_prompt,
-                    task_type=mapped_type,
-                    source_file=selected_ws_file,
-                    folder_name=folder_input.strip(),
-                )
-                st.success(f"🚀 Task dispatched autonomously! Task ID: `{new_task_id}`")
-                st.toast("Worker thread running in background!")
-                st.info(
-                    "You can safely close this browser tab, refresh, or switch tabs while the task executes in the background."
-                )
-
-    with st.expander(
-        "🔔 Instant Notification & Twilio Voice Call Test", expanded=False
-    ):
-        c_call1, c_call2 = st.columns([3, 2])
-        with c_call1:
-            st.markdown("**Twilio Tamil Voice Alert (`<Say language='ta-IN'>`):**")
-            st.caption(
-                "When autonomous tasks finish or encounter errors in the background, your phone receives an immediate call in Tamil."
-            )
-        with c_call2:
-            if st.button(
-                "📞 Call Me Now (Test Agent Alert)",
-                key="tab1_test_call_btn",
-                use_container_width=True,
-            ):
-                with st.spinner("Connecting to phone..."):
-                    ok, res = make_agent_call(
-                        "வணக்கம்! உங்கள் ஏஜென்ட் வெற்றிகரமாக இணைக்கப்பட்டுள்ளது."
-                    )
-                    if ok:
-                        st.success(f"Calling your number now! Call SID: {res}")
-                    else:
-                        st.error(f"Call failed: {res}")
-
-# ------------------------------------------------------------------------------
-# TAB 1.5: TWO-WAY VOICE ASSISTANT (LIVE STATUS & AGENT TALK BACK)
-# ------------------------------------------------------------------------------
-with tab_voice_chat:
-    st.subheader("🎙️ Talk to My Agent (Live Voice Assistant & Status Control)")
-    st.markdown(
-        "🗣️ **Two-Way Conversational Agent:** Ask your agent live questions in Tamil or English: "
-        "***'இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?'***, ***'இப்ப என்ன பண்ணுது?'***, ***'எந்த மாடல் யூஸ் பண்ணுது?'*** "
-        "— the agent will evaluate live execution telemetry and **literally speak back to you aloud!**"
-    )
-
-    # 1. Quick Inquiry Pills (Tamil & English)
-    st.markdown(
-        "**💡 Quick Voice Inquiries (விரைவு வினாக்கள் - கிளிக் செய்து கேட்கலாம்):**"
-    )
-    qv_c1, qv_c2, qv_c3 = st.columns(3)
-    with qv_c1:
-        if st.button(
-            "📍 இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?",
-            key="qv_btn_1",
-            use_container_width=True,
-        ):
-            st.session_state["active_voice_query"] = (
-                "இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?"
-            )
-    with qv_c2:
-        if st.button("⚡ இப்ப என்ன பண்ணுது?", key="qv_btn_2", use_container_width=True):
-            st.session_state["active_voice_query"] = "இப்ப என்ன பண்ணுது?"
-    with qv_c3:
-        if st.button(
-            "🤖 எந்த மாடல் யூஸ் பண்ணுது?", key="qv_btn_3", use_container_width=True
-        ):
-            st.session_state["active_voice_query"] = "எந்த மாடல் யூஸ் பண்ணுது?"
-
-    qv_c4, qv_c5, qv_c6 = st.columns(3)
-    with qv_c4:
-        if st.button(
-            "🌍 Where is this project at?", key="qv_btn_4", use_container_width=True
-        ):
-            st.session_state["active_voice_query"] = "Where is this project at?"
-    with qv_c5:
-        if st.button(
-            "🔍 What is it doing right now?", key="qv_btn_5", use_container_width=True
-        ):
-            st.session_state["active_voice_query"] = "What is it doing right now?"
-    with qv_c6:
-        if st.button(
-            "🏆 டாஸ்க் முடிஞ்சுடுச்சா?", key="qv_btn_6", use_container_width=True
-        ):
-            st.session_state["active_voice_query"] = "டாஸ்க் முடிஞ்சுடுச்சா?"
-
-    st.markdown(
-        "<hr style='margin: 0.8rem 0; border-color: #33415555;'/>",
+            <div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 14px;">
+                Autonomous 24/7 Engine ready for Tamil & English commands.
+            </div>
+        """,
         unsafe_allow_html=True,
     )
 
-    # 2. Interactive Input Box & Mic Trigger
-    col_ask1, col_ask2 = st.columns([4, 1])
-    with col_ask1:
-        user_v_query = st.text_input(
-            "Ask SRI Agent a question (Tamil / English):",
-            value=st.session_state.get("active_voice_query", ""),
-            placeholder="e.g. இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு? or What is the agent doing right now?",
-            key="agent_voice_chat_text_input",
+    db_state = load_db()
+    metrics = db_state.get("metrics", {})
+    all_tasks = db_state.get("tasks", {})
+
+    running_count = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
+    completed_count = metrics.get("completed_tasks", 0)
+    failed_count = metrics.get("failed_tasks", 0)
+    total_tokens = metrics.get("total_tokens", 0)
+
+    col_m1, col_m2 = st.columns(2)
+    col_m1.metric("Active", running_count)
+    col_m2.metric("Completed", completed_count)
+
+    col_m3, col_m4 = st.columns(2)
+    col_m3.metric("Failed", failed_count)
+    col_m4.metric("Est. Tokens", f"{total_tokens:,}")
+
+    st.markdown("---")
+    st.markdown(f"**Runtime:** `{RUNTIME_ENV['env_name']}`")
+    ws_files = get_workspace_files()
+    st.caption(f"📁 Workspace: `{len(ws_files)} files` | 📦 Outputs: `outputs/`")
+
+    st.markdown("---")
+    st.markdown("**⚡ Multi-AI Tier Status:**")
+    st.caption("🟢 Tier 1: Cloud LLMs (Gemini / OpenRouter Free)")
+    st.caption("🟢 Tier 2: Google Antigravity Bridge")
+    st.caption("🟢 Tier 3: Stitch AI Design System")
+    st.caption("🟢 Twilio Phone & WhatsApp: Active")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------------------------
+# RENDER ZONE 2: GOLDEN VOICE ORB, PILLS & UNIFIED PROMPT BAR
+# ------------------------------------------------------------------------------
+def render_zone_center():
+    # Persistent Live Task Tracker at top of Center Zone
+    render_persistent_live_task_tracker()
+
+    # 3D Glowing Golden Neural Voice Orb
+    orb_html = """
+    <div class="voice-orb-wrapper" id="orb-trigger">
+        <div class="soundwave-ring ring-1"></div>
+        <div class="soundwave-ring ring-2"></div>
+        <div class="soundwave-ring ring-3"></div>
+        <div class="golden-neural-orb">
+            <div class="orb-core-glow"></div>
+            <div class="orb-icon">🎙️</div>
+        </div>
+    </div>
+    <div style="text-align: center; margin-bottom: 12px;">
+        <span style="font-size: 0.9rem; font-weight: 800; color: #F59E0B; letter-spacing: 0.6px;">
+            SRI NEURAL VOICE CORE
+        </span>
+        <div style="font-size: 0.78rem; color: #94A3B8; margin-top: 2px;">
+            Two-Way Conversational Assistant • Tamil & English Voice Interface
+        </div>
+    </div>
+    """
+    st.markdown(orb_html, unsafe_allow_html=True)
+
+    # Horizontal Action Pills (Fast One-Click Queries)
+    st.markdown(
+        "<div style='font-size: 0.78rem; font-weight: 700; color: #A78BFA; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;'>💡 Quick Action & Status Pills</div>",
+        unsafe_allow_html=True,
+    )
+    p_c1, p_c2, p_c3 = st.columns(3)
+    with p_c1:
+        if st.button("📍 இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?", key="pill_q1", use_container_width=True):
+            st.session_state["task_prompt_val"] = "இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?"
+            st.session_state["active_voice_query"] = "இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?"
+    with p_c2:
+        if st.button("⚡ இப்ப என்ன பண்ணுது?", key="pill_q2", use_container_width=True):
+            st.session_state["task_prompt_val"] = "இப்ப என்ன பண்ணுது?"
+            st.session_state["active_voice_query"] = "இப்ப என்ன பண்ணுது?"
+    with p_c3:
+        if st.button("🤖 எந்த மாடல் யூஸ் பண்ணுது?", key="pill_q3", use_container_width=True):
+            st.session_state["task_prompt_val"] = "எந்த மாடல் யூஸ் பண்ணுது?"
+            st.session_state["active_voice_query"] = "எந்த மாடல் யூஸ் பண்ணுது?"
+
+    p_c4, p_c5, p_c6 = st.columns(3)
+    with p_c4:
+        if st.button("💻 Student Dashboard", key="pill_p1", use_container_width=True):
+            st.session_state["task_prompt_val"] = "Build a responsive, modern student dashboard in HTML/CSS/JS with course progress charts, assignment tracker, and dark mode toggle."
+            st.session_state["task_folder_val"] = "student_dashboard"
+    with p_c5:
+        if st.button("🔐 SaaS Auth Portal", key="pill_p2", use_container_width=True):
+            st.session_state["task_prompt_val"] = "Create a sleek, modern SaaS Login and Registration page with tab switching, password strength meter, and social login buttons."
+            st.session_state["task_folder_val"] = "saas_auth"
+    with p_c6:
+        if st.button("🏆 டாஸ்க் முடிஞ்சுடுச்சா?", key="pill_q4", use_container_width=True):
+            st.session_state["task_prompt_val"] = "டாஸ்க் முடிஞ்சுடுச்சா?"
+            st.session_state["active_voice_query"] = "டாஸ்க் முடிஞ்சுடுச்சா?"
+
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+    # UNIFIED PROMPT BAR: Input box + compact Mic button (🎙️) and Gold Send button (➤) side-by-side
+    col_prompt_box, col_p_mic, col_p_send = st.columns([7.8, 1.1, 1.1])
+    with col_prompt_box:
+        prompt_input_text = st.text_input(
+            "Message SRI...",
+            value=st.session_state.get("task_prompt_val", ""),
+            placeholder="Message SRI... (Ask status in Tamil/English or describe a task)",
+            label_visibility="collapsed",
+            key="unified_prompt_text_field",
         )
-    with col_ask2:
-        st.write("")  # spacing
-        submit_v_query = st.button(
-            "🗣️ கேளுங்கள் (Ask)", use_container_width=True, key="submit_v_query_btn"
-        )
+    with col_p_mic:
+        mic_pressed = st.button("🎙️", key="unified_mic_btn", help="Click to speak via microphone (Tamil/English)", use_container_width=True)
+    with col_p_send:
+        send_pressed = st.button("➤", key="unified_send_btn", type="primary", help="Send command or ask question", use_container_width=True)
 
-    # Mic & Refresh Controls
-    col_mic_ctl1, col_mic_ctl2 = st.columns([1, 1])
-    with col_mic_ctl1:
-        if st.button(
-            "🎤 மைக்ரோஃபோன் வழியாகக் கேள் (speech_recognition ta-IN)",
-            key="tab_vc_mic_btn",
-            use_container_width=True,
-        ):
-            with st.spinner(
-                "🎙️ ஸ்ரீ கவனித்துக் கொண்டிருக்கிறது... உங்கள் கேள்வியைப் பேசுங்கள்:"
-            ):
-                try:
-                    spoken_cmd = sri_universal_router.listen_voice_command()
-                    if spoken_cmd:
-                        st.session_state["active_voice_query"] = spoken_cmd
-                        st.toast(f"குரல் பெறப்பட்டது: {spoken_cmd}")
-                        st.rerun()
-                    else:
-                        st.info(
-                            "⚠️ மைக்ரோஃபோன் சிக்னல் இல்லை அல்லது timeout ஆனது. மேலே டைப் செய்து கேட்கலாம்."
-                        )
-                except Exception as me:
-                    st.warning(f"Microphone notice: {me}")
+    # Handle Mic Click
+    if mic_pressed:
+        with st.spinner("🎙️ ஸ்ரீ கவனித்துக் கொண்டிருக்கிறது... உங்கள் கேள்வியைப் பேசுங்கள்:"):
+            try:
+                spoken = sri_universal_router.listen_voice_command()
+                if spoken:
+                    st.session_state["task_prompt_val"] = spoken
+                    st.session_state["active_voice_query"] = spoken
+                    st.toast(f"குரல் பெறப்பட்டது: {spoken}")
+                    st.rerun()
+                else:
+                    st.info("⚠️ மைக்ரோஃபோன் சிக்னல் கிடைக்கவில்லை. மேலேயுள்ள பெட்டியில் டைப் செய்யலாம்.")
+            except Exception as me:
+                st.warning(f"Microphone notice: {me}")
 
-    with col_mic_ctl2:
-        if st.button(
-            "🔄 நிலையை உடனடியாகப் புதுப்பி (Live Sync)",
-            key="tab_vc_refresh_btn",
-            use_container_width=True,
-        ):
-            st.rerun()
+    # Handle Send / Execution
+    effective_prompt = prompt_input_text.strip()
+    if send_pressed and effective_prompt:
+        st.session_state["task_prompt_val"] = effective_prompt
 
-    # 3. Process Query & Speak Back Aloud
+        # Check if it is a Status/Inquiry Query
+        query_lower = effective_prompt.lower()
+        is_inquiry = any(k in query_lower for k in [
+            "எங்க", "என்ன பண்ணுது", "மாடல்", "முடிஞ்சு", "status", "where is", "what is",
+            "doing right now", "which model", "finished", "completed", "நிலை"
+        ])
+
+        if is_inquiry:
+            st.session_state["active_voice_query"] = effective_prompt
+        else:
+            # Autonomous Task Dispatch
+            folder_target = st.session_state.get("task_folder_val", "").strip() or "student_learning_hub"
+            task_kind = "frontend" if any(w in query_lower for w in ["ui", "design", "html", "css", "frontend", "பக்கம்"]) else "auto"
+            new_t_id = dispatch_background_task(
+                prompt=effective_prompt,
+                task_type=task_kind,
+                folder_name=folder_target,
+            )
+            st.success(f"🚀 Task dispatched autonomously! Task ID: `{new_t_id}`")
+            st.toast("Task executing in background!")
+
+    # Live Spoken Agent Reply Card (if voice query active)
     active_q = st.session_state.get("active_voice_query", "").strip()
-    if submit_v_query and user_v_query:
-        active_q = user_v_query.strip()
-        st.session_state["active_voice_query"] = active_q
-
     if active_q:
         reply_dict = get_agent_voice_status_reply(active_q)
-
         st.markdown(
             f"""
-            <div style="background: rgba(30, 41, 59, 0.85); border: 1.5px solid #8B5CF6; border-radius: 12px;
-                        padding: 16px 20px; margin-top: 14px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(139, 92, 246, 0.15);">
-                <div style="font-size: 0.85rem; color: #A78BFA; margin-bottom: 4px; font-weight: 700;">
+            <div style="background: rgba(18, 22, 33, 0.95); border: 1.5px solid #F59E0B; border-radius: 12px;
+                        padding: 16px 20px; margin-top: 14px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.2);">
+                <div style="font-size: 0.8rem; color: #FBBF24; margin-bottom: 4px; font-weight: 700;">
                     👤 உங்கள் கேள்வி (User Inquiry):
                 </div>
-                <div style="font-size: 1.05rem; color: #FFFFFF; font-weight: 600; margin-bottom: 14px;">
+                <div style="font-size: 1rem; color: #FFFFFF; font-weight: 600; margin-bottom: 12px;">
                     "{html.escape(active_q)}"
                 </div>
-                <div style="font-size: 0.85rem; color: #38BDF8; margin-bottom: 6px; font-weight: 700;">
+                <div style="font-size: 0.8rem; color: #34D399; margin-bottom: 6px; font-weight: 700;">
                     🤖 SRI Agent நேரலை பதில் (Live Agent Status Reply):
                 </div>
-                <div style="font-size: 0.95rem; color: #F1F5F9; line-height: 1.6;">
+                <div style="font-size: 0.92rem; color: #F1F5F9; line-height: 1.6;">
                     {reply_dict['display_text']}
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
-        # Autoplay audio speech via Browser Web Speech API (window.speechSynthesis)
         tts_html = generate_speech_synthesis_html(
             reply_dict["spoken_text"], lang=reply_dict["lang"], autoplay=True
         )
         components.html(tts_html, height=135)
 
+
 # ------------------------------------------------------------------------------
-# TAB 2: SRI - 24/7 CLOUD MULTI-AI AGENT & WORKSPACE
+# RENDER ZONE 3: SEGMENTED [ PREVIEW | CODE ] PROJECT VIEWER
 # ------------------------------------------------------------------------------
-with tab_universal:
-    st.subheader("🤖 SRI - 24/7 Cloud Multi-AI Agent")
-    st.success("🟢 Cloud Server: ACTIVE (போன்/லேப்டாப் ஆஃப் ஆனாலும் இயங்கும்)")
-    st.caption(
-        "அனைத்து AI-களையும் (Stitch AI, Google Gemini Pro, OpenRouter) ஒருங்கிணைத்து பணிபுரியும் மாஸ்டர் தளம் • Twilio WhatsApp 3-Stage Progress Updates."
+def render_zone_right():
+    st.markdown(
+        "<div style='font-size: 0.88rem; font-weight: 800; color: #FFFFFF; margin-bottom: 6px;'>👁️ Project Viewer</div>",
+        unsafe_allow_html=True,
     )
 
-    if "sri_agent" not in st.session_state:
-        st.session_state.sri_agent = sri_master_agent
-
-    agent = st.session_state.sri_agent
-
-    # புதிய ஏரியா சேர்க்கும் வசதி
-    col_u1, col_u2 = st.columns([3, 1])
-    with col_u1:
-        new_area = st.text_input(
-            "புதிய வேலை ஏரியாவைச் சேர்க்க (உம்: workspace/my_new_app):",
-            key="tab_u_new_area",
+    # Segmented Switcher [ Preview | Code ]
+    col_seg, col_exp = st.columns([2, 1])
+    with col_seg:
+        viewer_mode = st.radio(
+            "Viewer Mode",
+            options=["🌐 Preview", "💻 Code"],
+            index=0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="sri_segmented_viewer_mode",
         )
-    with col_u2:
-        st.write("")
-        st.write("")
-        if (
-            st.button("➕ Add Work Area", use_container_width=True, key="tab_u_add_btn")
-            and new_area
-        ):
-            agent.add_new_work_area(new_area)
-            st.rerun()
+    with col_exp:
+        full_height_toggle = st.toggle("⛶ Expand", value=False, key="pv_expand_toggle")
 
-    # டாஸ்க் படிவம் (Task Form)
-    with st.form("task_form_u"):
-        selected_area = st.selectbox(
-            "📂 எந்த ஏரியாவில் வேலை செய்ய வேண்டும்?",
-            agent.approved_work_areas,
-            key="tab_u_selected_area",
-        )
-        task_input_u = st.text_area(
-            "📝 ஸ்ரீ (SRI) செய்ய வேண்டிய டாஸ்க்கை உள்ளிடவும்:",
-            placeholder="உம்: மாணவர் ஆப்பிற்கு அழகான UI டிசைன் செய்து கோட் எழுது...",
-            height=100,
-            key="tab_u_task_input",
-        )
-        submitted = st.form_submit_button(
-            "🚀 Start Background Task", type="primary", use_container_width=True
-        )
+    # Available files from workspace and outputs
+    ws_files = get_workspace_files()
+    db_items = load_db()
+    completed_tasks = [
+        t for t in db_items.get("tasks", {}).values()
+        if t.get("status") == "COMPLETED" and t.get("output_file") and os.path.exists(t.get("output_file"))
+    ]
 
-        if submitted:
-            if not task_input_u.strip():
-                st.warning("⚠️ தயவுசெய்து டாஸ்க் விவரத்தை உள்ளிடவும்.")
-            else:
-                new_task_id = f"SRI-{uuid.uuid4().hex[:6].upper()}"
-                t_low = task_input_u.lower()
-                if any(
-                    w in t_low for w in ["design", "ui", "frontend", "டிசைன்", "பக்கம்"]
-                ):
-                    ai_engine = "Stitch AI (Frontend Specialist)"
-                    task_type = "frontend"
-                elif any(
-                    w in t_low for w in ["code", "app", "deploy", "கோடு", "டிப்ளாய்"]
-                ):
-                    ai_engine = "Google Gemini Pro + Antigravity"
-                    task_type = "auto"
-                else:
-                    ai_engine = "OpenRouter Multi-AI Engine"
-                    task_type = "general"
+    file_options = []
+    for wf in ws_files:
+        file_options.append(("workspace", wf, os.path.join(WORKSPACE_DIR, wf)))
+    for ct in completed_tasks:
+        file_options.append(("outputs", f"outputs/{os.path.basename(ct['output_file'])}", ct["output_file"]))
 
-                # 24/7 Cloud Background Worker with 3-stage WhatsApp updates (50%, 80%, 100%)
-                if sri_cloud_background_worker:
-                    thread = threading.Thread(
-                        target=sri_cloud_background_worker,
-                        args=(
-                            new_task_id,
-                            selected_area,
-                            task_input_u.strip(),
-                            ai_engine,
-                        ),
-                        daemon=False,
-                    )
-                    thread.start()
+    if not file_options:
+        st.info("No projects or files in workspace yet. Click '🌱 Seed login.html' in the Control Drawer or submit a task.")
+        return
 
-                # Dispatch in app pipeline as well
-                folder_target = (
-                    selected_area.replace("workspace/", "").strip()
-                    or "student_learning_hub"
-                )
-                dispatch_background_task(
-                    prompt=task_input_u.strip(),
-                    task_type=task_type,
-                    folder_name=folder_target,
-                )
-
-                st.toast(f"✅ டாஸ்க் தொடங்கியது! ID: {new_task_id}")
-                st.success(
-                    f"✅ *{ai_engine}* வழியாக `{selected_area}` ஏரியாவில் பணி தொடங்கப்பட்டது! Task ID: `{new_task_id}`"
-                )
-                time.sleep(1)
-                st.rerun()
-
-    # WhatsApp Alert Test Expander
-    with st.expander(
-        "📲 Twilio WhatsApp Milestone Notifications Info & Test", expanded=False
-    ):
-        c_wa1, c_wa2 = st.columns([3, 2])
-        with c_wa1:
-            st.markdown("**3 கட்ட WhatsApp மெசேஜ் அப்டேட்ஸ்:**")
-            st.markdown(
-                "- **50%:** பாதி வேலை முடிந்தது (Area & Task விவரங்களுடன்)\n- **80%:** இறுதிக்கட்ட சரிபார்ப்பு நடக்கிறது\n- **100%:** முழுமையாக முடிந்துவிட்டது!"
-            )
-            wa_from_val = get_secret("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
-            wa_to_val = get_secret("MY_WHATSAPP_NUMBER", "Unconfigured")
-            st.caption(f"Twilio WhatsApp From: `{wa_from_val}` | To: `{wa_to_val}`")
-        with c_wa2:
-            if st.button(
-                "💬 Send Test WhatsApp Message",
-                key="tab_u_test_wa_btn",
-                use_container_width=True,
-            ):
-                if send_whatsapp_message:
-                    with st.spinner("WhatsApp மெசேஜ் அனுப்பப்படுகிறது..."):
-                        sent = send_whatsapp_message(
-                            "🤖 வணக்கம்! இது SRI Cloud Agent-ன் Twilio WhatsApp சோதனைச் செய்தி (Test Message)."
-                        )
-                        if sent:
-                            st.success("✅ WhatsApp மெசேஜ் வெற்றிகரமாக அனுப்பப்பட்டது!")
-                        else:
-                            st.warning(
-                                "⚠️ Twilio WhatsApp அனுப்ப இயலவில்லை. TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN & MY_WHATSAPP_NUMBER சரிபார்க்கவும்."
-                            )
-                else:
-                    st.error("Twilio client கிடைக்கவில்லை.")
-
-    st.divider()
-
-    # கீழே எப்போதும் தெரியும் Task History பகுதி
-    col_th1, col_th2 = st.columns([3, 1])
-    with col_th1:
-        st.subheader("📋 தற்போதைய & முடிந்த டாஸ்க்குகள்")
-    with col_th2:
-        if st.button(
-            "🔄 Refresh", key="tab_u_hist_refresh_btn", use_container_width=True
-        ):
-            st.rerun()
-
-    tasks_list = sri_cloud_load_tasks()
-
-    if not tasks_list:
-        st.info("இதுவரை எந்த டாஸ்க்கும் கொடுக்கப்படவில்லை.")
-    else:
-        for t in tasks_list:
-            t_desc = str(t.get("task_desc", ""))
-            t_id = str(t.get("task_id", ""))
-            t_area = str(t.get("work_area", ""))
-            t_ai = str(t.get("assigned_ai", ""))
-            t_status = str(t.get("status", ""))
-            t_progress = str(t.get("progress", ""))
-            t_step = str(t.get("current_step", ""))
-            t_time = str(t.get("updated_at", ""))
-            with st.container(border=True):
-                st.markdown(f"**📝 டாஸ்க் (Task):** {t_desc}")
-                st.markdown(f"**🆔 டாஸ்க் ஐடி (Task ID):** `{t_id}`")
-                st.markdown(f"**📂 வேலை செய்யும் இடம் (Area):** `{t_area}` ({t_ai})")
-                st.markdown(f"**📊 நிலை (Status):** {t_status} ({t_progress})")
-                st.caption(f"⚙️ {t_step} | 🕒 {t_time}")
-
-# ------------------------------------------------------------------------------
-# TAB 2: AUTO-CODE EDITOR & REFINER
-# ------------------------------------------------------------------------------
-with tab_editor:
-    st.subheader("🛠️ Safe Auto-Code Editor & Refiner")
-    st.caption(
-        "Safely reads files from `workspace/` via `safe_read_code`, prompts AI with `[Original Code] + [Change Request]`, and saves atomic updates to `outputs/<filename>_updated.<ext>` via `safe_write_code` without touching the original."
+    selected_tuple = st.selectbox(
+        "Select Project File to View:",
+        options=file_options,
+        format_func=lambda x: f"[{x[0]}] {x[1]}",
+        key="pv_file_selector",
+        label_visibility="collapsed",
     )
 
-    # Workspace File Management & Selection (supports nested projects)
-    workspace_files = get_workspace_files()
-
-    col_ws_sel, col_ws_act = st.columns([3, 2])
-    with col_ws_sel:
-        if workspace_files:
-            selected_file = st.selectbox(
-                "📁 Select file to inspect & refine from 'workspace/':",
-                workspace_files,
-                index=0,
-            )
-        else:
-            selected_file = None
-            st.info(
-                "No files currently in `workspace/`. Click 'Seed Sample' or upload a code file below."
-            )
-
-    with col_ws_act:
-        st.write("")
-        st.write("")
-        col_act1, col_act2 = st.columns(2)
-        with col_act1:
-            if st.button("✨ Seed Sample 'login.html'", use_container_width=True):
-                sample_login_code = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login Portal</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
-  <div class="w-full max-w-md bg-slate-800 rounded-2xl shadow-xl p-8 border border-slate-700">
-    <div class="text-center mb-8">
-      <h1 class="text-2xl font-bold text-white">Welcome Back</h1>
-      <p class="text-sm text-slate-400 mt-1">Please enter your credentials to sign in</p>
-    </div>
-
-    <form id="loginForm" class="space-y-5" onsubmit="event.preventDefault(); alert('Login submitted');">
-      <div>
-        <label class="block text-xs font-semibold text-slate-300 uppercase mb-2" for="email">Email Address</label>
-        <input 
-          id="email" 
-          type="email" 
-          required 
-          placeholder="user@example.com"
-          class="w-full px-4 py-3 rounded-lg bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-      </div>
-
-      <div>
-        <label class="block text-xs font-semibold text-slate-300 uppercase mb-2" for="password">Password</label>
-        <input 
-          id="password" 
-          type="password" 
-          required 
-          placeholder="••••••••"
-          class="w-full px-4 py-3 rounded-lg bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-      </div>
-
-      <button 
-        type="submit" 
-        class="w-full py-3 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-lg shadow-indigo-600/30 transition-all duration-150">
-        Sign In
-      </button>
-    </form>
-  </div>
-</body>
-</html>"""
-                with open(
-                    os.path.join(WORKSPACE_DIR, "login.html"), "w", encoding="utf-8"
-                ) as sf:
-                    sf.write(sample_login_code)
-                st.toast("Seeded 'login.html' in workspace!")
-                st.rerun()
-
-        with col_act2:
-            show_uploader = st.toggle("📤 Upload Code File", value=False)
-
-    if show_uploader:
-        up_file = st.file_uploader(
-            "Upload code file into workspace:",
-            type=["html", "htm", "py", "js", "css", "json", "txt"],
-        )
-        if up_file is not None:
-            up_path = os.path.join(WORKSPACE_DIR, up_file.name)
-            with open(up_path, "wb") as uf:
-                uf.write(up_file.getvalue())
-            st.success(f"Uploaded `{up_file.name}` to `{WORKSPACE_DIR}/`!")
-            st.rerun()
-
-    if selected_file:
-        # Tool 1: safe_read_code
-        read_success, file_content, read_error = safe_read_code(selected_file)
-
-        if not read_success:
-            st.error(f"Failed to read file: {read_error}")
-        else:
-            file_base, file_ext = os.path.splitext(selected_file)
-            code_lang = file_ext.lstrip(".") or "text"
-            flat_name = selected_file.replace("/", "_").replace("\\", "_")
-            flat_base, _ = os.path.splitext(flat_name)
-
-            # File Overview Card
-            col_info1, col_info2, col_info3 = st.columns(3)
-            col_info1.metric("Selected File", selected_file)
-            col_info2.metric("Size", f"{len(file_content):,} bytes")
-            col_info3.metric("Lines", len(file_content.splitlines()))
-
-            with st.expander(
-                f"📄 View Original Source Code (`workspace/{selected_file}`)",
-                expanded=False,
-            ):
-                st.code(file_content, language=code_lang)
-
-            st.markdown("---")
-            st.markdown("#### ✏️ Describe Your Changes & Enhancements")
-
-            # Quick Refinement Chips
-            st.markdown("**💡 Quick Suggestions:**")
-            e_cols = st.columns(3)
-            preset_change = ""
-            file_label = os.path.basename(selected_file)
-            if e_cols[0].button(
-                "🔑 Add Password Reset & Remember Me", use_container_width=True
-            ):
-                preset_change = f"Take {file_label} and add a sleek password reset modal with email verification, along with a 'Remember me' checkbox and forgot password link."
-            if e_cols[1].button(
-                "🌙 Switch to Dark Glassmorphism", use_container_width=True
-            ):
-                preset_change = f"Refactor {file_label} into an ultra-modern dark glassmorphism design with backdrop blur, glowing borders, and smooth transitions."
-            if e_cols[2].button(
-                "✅ Add Toast Alerts & Validation", use_container_width=True
-            ):
-                preset_change = f"Enhance {file_label} with client-side form validation, inline error indicators, and animated success toast notifications upon submission."
-
-            user_change_input = st.text_area(
-                "Enter modification instructions for this file:",
-                value=preset_change if preset_change else "",
-                placeholder="e.g. Add a password reset modal with smooth animations, remember me checkbox, and social login icons...",
-                height=110,
-            )
-
-            col_sub1, col_sub2 = st.columns([2, 1])
-            with col_sub2:
-                st.write("")
-                st.write("")
-                edit_btn = st.button(
-                    "⚡ Execute Safe Auto-Edit",
-                    type="primary",
-                    use_container_width=True,
-                )
-
-            if edit_btn:
-                if not user_change_input.strip():
-                    st.error("Please enter modification instructions.")
-                else:
-                    new_task_id = dispatch_code_edit_task(
-                        filename=selected_file, change_request=user_change_input.strip()
-                    )
-                    st.success(
-                        f"🚀 Auto-Edit Task Dispatched! Task ID: `{new_task_id}`"
-                    )
-                    st.toast("Auto-Edit running in background!")
-                    st.info(
-                        f"🛡️ Original file `workspace/{selected_file}` remains untouched.\n\n"
-                        f"📦 Updated version will be saved to `outputs/{flat_base}_updated{file_ext}`.\n\n"
-                        f"You can monitor live progress in the **'Live Background Monitor'** tab or switch tabs freely."
-                    )
-
-            # Check if an updated version already exists in outputs
-            updated_target_file = os.path.join(
-                OUTPUT_DIR, f"{flat_base}_updated{file_ext}"
-            )
-            if os.path.exists(updated_target_file):
-                st.markdown("---")
-                st.markdown(
-                    f"#### ✨ Latest Updated Version (`outputs/{flat_base}_updated{file_ext}`)"
-                )
-
-                try:
-                    with open(updated_target_file, "r", encoding="utf-8") as uf:
-                        updated_content = uf.read()
-
-                    diff_tab1, diff_tab2, diff_tab3 = st.tabs(
-                        [
-                            "🌐 Live Preview (Updated)",
-                            "💻 Updated Code (outputs/)",
-                            "📄 Original Code (workspace/)",
-                        ]
-                    )
-
-                    with diff_tab1:
-                        if file_ext.lower() in [".html", ".htm"]:
-                            components.html(updated_content, height=550, scrolling=True)
-                        else:
-                            st.write(
-                                "Live preview is only available for HTML files. View updated code in the code tab."
-                            )
-
-                    with diff_tab2:
-                        st.download_button(
-                            "📥 Download Updated Code",
-                            data=updated_content,
-                            file_name=f"{flat_base}_updated{file_ext}",
-                            mime=(
-                                "text/html"
-                                if file_ext.lower() in [".html", ".htm"]
-                                else "text/plain"
-                            ),
-                            key=f"dl_updated_{flat_base}",
-                        )
-                        st.code(updated_content, language=code_lang)
-
-                    with diff_tab3:
-                        st.code(file_content, language=code_lang)
-
-                except Exception as comp_err:
-                    st.warning(f"Could not load updated version: {comp_err}")
-
-# ------------------------------------------------------------------------------
-# TAB 3: LIVE BACKGROUND MONITOR
-# ------------------------------------------------------------------------------
-with tab_monitor:
-    st.subheader("Live Background Task Execution Monitor")
-    st.caption(
-        "Persisted in `tasks_db.json`. Real-time progress updates decoupled from UI state."
-    )
-
-    @st.fragment(run_every=3)
-    def render_live_monitor():
-        current_db = load_db()
-        tasks_map = current_db.get("tasks", {})
-
-        if not tasks_map:
-            st.info(
-                "No tasks recorded yet. Launch a task or run an auto-code edit to observe execution."
-            )
+    if selected_tuple:
+        _, display_name, full_path = selected_tuple
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
             return
 
-        # Sort tasks by creation date descending
-        sorted_tasks = sorted(
-            tasks_map.values(), key=lambda t: t.get("created_at", ""), reverse=True
-        )
-        active_list = [t for t in sorted_tasks if t["status"] == "RUNNING"]
-        past_list = [t for t in sorted_tasks if t["status"] != "RUNNING"]
+        is_html = full_path.lower().endswith((".html", ".htm"))
+        preview_h = 750 if full_height_toggle else 480
 
-        # ACTIVE TASKS SECTION
-        if active_list:
-            st.markdown("#### 🟡 Currently Running Tasks")
-            for task in active_list:
-                with st.container():
-                    st.markdown(f"**Task ID:** `{task['id']}` — **{task['title']}**")
-                    progress_val = min(
-                        task.get("current_step", 1) / MAX_AGENT_STEPS, 1.0
-                    )
-                    st.progress(
-                        progress_val,
-                        text=f"Step {task.get('current_step', 1)} of {MAX_AGENT_STEPS}",
-                    )
-
-                    # Recent logs
-                    logs = task.get("logs", [])
-                    log_text = "\n".join(logs[-6:]) if logs else "Processing..."
-                    st.markdown(
-                        f'<div class="terminal-box">{log_text}</div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown("---")
+        if viewer_mode == "🌐 Preview":
+            if is_html:
+                components.html(content, height=preview_h, scrolling=True)
+            else:
+                st.info("This is a script/code file. Switch to '💻 Code' to view full source.")
         else:
-            st.success("🟢 No tasks currently running. Background worker is idle.")
-
-        # HISTORICAL AUDIT LOG SECTION
-        st.markdown("#### 📜 Task History & Execution Audit")
-
-        # Summary Table View
-        table_data = []
-        for t in sorted_tasks:
-            status_badge = (
-                "🟢 COMPLETED"
-                if t["status"] == "COMPLETED"
-                else ("🟡 RUNNING" if t["status"] == "RUNNING" else f"🔴 {t['status']}")
-            )
-            task_kind = (
-                "🛠️ Refine" if t.get("task_type") == "code_edit" else "✨ Create"
-            )
-            ws_item = (
-                f"workspace/{t.get('workspace_file')}"
-                if t.get("workspace_file")
-                else (
-                    f"workspace/{t.get('source_file')}" if t.get("source_file") else "—"
+            # Code View
+            st.caption(f"**Path:** `{full_path}` | **Size:** `{len(content):,} bytes`")
+            col_dl1, col_dl2 = st.columns(2)
+            with col_dl1:
+                st.download_button(
+                    "📥 Download Code File",
+                    data=content,
+                    file_name=os.path.basename(full_path),
+                    mime="text/html" if is_html else "text/plain",
+                    use_container_width=True,
+                    key=f"dl_single_{os.path.basename(full_path)}",
                 )
-            )
-            table_data.append(
-                {
-                    "Status": status_badge,
-                    "Type": task_kind,
-                    "Task ID": t["id"],
-                    "Title": t["title"],
-                    "Duration": f"{t.get('duration_seconds', 0)}s",
-                    "Model": t.get("model_used", "Pending"),
-                    "Workspace Project": ws_item,
-                    "Output Backup": (
-                        os.path.basename(t.get("output_file", ""))
-                        if t.get("output_file")
-                        else "—"
-                    ),
-                }
-            )
-        st.table(table_data)
-
-        # Deep-dive Inspector
-        st.markdown("##### 🔍 Inspect Task Details:")
-        selected_task_id = st.selectbox(
-            "Select task for full step-by-step logs and architecture plan:",
-            [t["id"] for t in sorted_tasks],
-            format_func=lambda tid: f"{tid} — {tasks_map[tid]['title']} [{tasks_map[tid]['status']}]",
-        )
-        if selected_task_id and selected_task_id in tasks_map:
-            sel_t = tasks_map[selected_task_id]
-            col_d0, col_d1, col_d2, col_d3 = st.columns(4)
-            col_d0.caption(
-                f"**Type:** `{'🛠️ Code Refine' if sel_t.get('task_type') == 'code_edit' else '✨ New Creation'}`"
-            )
-            col_d1.caption(f"**Created:** {sel_t.get('created_at', '')[:19]}")
-            col_d2.caption(f"**Duration:** {sel_t.get('duration_seconds', 0)}s")
-            col_d3.caption(f"**Tokens:** ~{sel_t.get('tokens', 0)}")
-
-            if sel_t.get("workspace_file"):
-                st.info(
-                    f"📁 **Workspace Project:** `workspace/{sel_t['workspace_file']}`\n\n📦 **Versioned Backup:** `{sel_t.get('output_file', '')}`"
-                )
-            elif sel_t.get("source_file"):
-                st.info(
-                    f"📁 **Source File Modified:** `workspace/{sel_t['source_file']}` (Preserved) ➔ Output: `{sel_t.get('output_file', '')}`"
+            with col_dl2:
+                # One-click ZIP download of the project directory
+                parent_dir = os.path.dirname(full_path)
+                zip_bytes = create_project_zip_bundle(parent_dir if os.path.isdir(parent_dir) else full_path)
+                st.download_button(
+                    "📦 Download Full (.ZIP)",
+                    data=zip_bytes,
+                    file_name=f"{os.path.basename(parent_dir or 'project')}.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    key=f"dl_zip_{os.path.basename(full_path)}",
                 )
 
-            # 5-Dimensional Reasoning Analysis
-            plan_5d = sel_t.get("plan_5d", {})
-            if plan_5d and any(plan_5d.values()):
-                with st.expander(
-                    "🧠 5-Dimensional Multi-Task Reasoning Analysis", expanded=True
-                ):
-                    d_tab1, d_tab2, d_tab3, d_tab4, d_tab5 = st.tabs(
-                        [
-                            "🏛️ Architecture",
-                            "🎨 User Experience",
-                            "🛡️ Resilience",
-                            "⚡ Efficiency",
-                            "🔍 Reflection",
-                        ]
-                    )
-                    with d_tab1:
-                        st.markdown(
-                            plan_5d.get(
-                                "architecture", "No architecture specs recorded."
-                            )
-                        )
-                    with d_tab2:
-                        st.markdown(plan_5d.get("ux", "No UX specifications recorded."))
-                    with d_tab3:
-                        st.markdown(
-                            plan_5d.get(
-                                "resilience", "No resilience specifications recorded."
-                            )
-                        )
-                    with d_tab4:
-                        st.markdown(
-                            plan_5d.get(
-                                "efficiency", "No efficiency specifications recorded."
-                            )
-                        )
-                    with d_tab5:
-                        st.markdown(
-                            plan_5d.get(
-                                "reflection", "No reflection checklist recorded."
-                            )
-                        )
-            elif sel_t.get("plan"):
-                with st.expander(
-                    "📐 Technical Implementation Plan (Step 1 Output)", expanded=False
-                ):
-                    st.markdown(sel_t["plan"])
+            code_language = "html" if is_html else ("python" if full_path.endswith(".py") else ("json" if full_path.endswith(".json") else "text"))
+            st.code(content, language=code_language, line_numbers=True)
 
-            # Step 1: Initialized Schema & Data Structures
-            if sel_t.get("schema_data"):
-                with st.expander(
-                    "📊 Step 1 Artifact: Initialized Project Schema & Data Structures (`workspace/`)",
-                    expanded=False,
-                ):
-                    st.code(
-                        sel_t["schema_data"],
-                        language=(
-                            "json"
-                            if sel_t["schema_data"].strip().startswith("{")
-                            else "text"
-                        ),
-                    )
-
-            # Step 3: Self-Verification & Reflection Report
-            if sel_t.get("verification_report"):
-                with st.expander(
-                    "✅ Step 3 Artifact: Self-Verification & Reflection Report",
-                    expanded=False,
-                ):
-                    st.markdown(sel_t["verification_report"])
-
-            with st.expander("🖥️ Complete Execution Logs", expanded=True):
-                full_log_str = "\n".join(sel_t.get("logs", []))
-                st.code(full_log_str, language="bash")
-
-            if sel_t.get("error"):
-                st.error(f"Execution Error: {sel_t['error']}")
-
-    render_live_monitor()
 
 # ------------------------------------------------------------------------------
-# TAB 4: ARTIFACT PREVIEWER & CODE VIEWER
+# RENDER SPATIAL LAYOUT BASED ON SELECTION
 # ------------------------------------------------------------------------------
-with tab_artifacts:
-    st.subheader("Generated Artifacts & Interactive Preview")
-    st.write(
-        "Browse, interact with, and export code generated by autonomous background runs."
-    )
-
-    view_source_tab1, view_source_tab2 = st.tabs(
-        ["📁 Workspace Projects (`workspace/`)", "📦 Versioned Artifacts (`outputs/`)"]
-    )
-
-    with view_source_tab1:
-        st.markdown("#### 📂 Interactive Workspace Projects")
-        ws_all_files = get_workspace_files()
-        ws_html_files = [
-            f for f in ws_all_files if f.lower().endswith((".html", ".htm"))
-        ]
-
-        if not ws_all_files:
-            st.info("No files in `workspace/` yet. Launch a new task or seed sample.")
-        else:
-            default_ws = ws_html_files[0] if ws_html_files else ws_all_files[0]
-            selected_ws_preview = st.selectbox(
-                "Select Workspace Project / File to Preview:",
-                ws_all_files,
-                index=(
-                    ws_all_files.index(default_ws) if default_ws in ws_all_files else 0
-                ),
-                key="ws_preview_select",
-            )
-            if selected_ws_preview:
-                ok_read, ws_content, ws_err = safe_read_code(selected_ws_preview)
-                if not ok_read:
-                    st.error(f"Failed to read file: {ws_err}")
-                else:
-                    col_wb1, col_wb2 = st.columns([1, 4])
-                    with col_wb1:
-                        st.download_button(
-                            label="📥 Download File",
-                            data=ws_content,
-                            file_name=os.path.basename(selected_ws_preview),
-                            mime=(
-                                "text/html"
-                                if selected_ws_preview.endswith(".html")
-                                else "text/plain"
-                            ),
-                            key=f"dl_ws_{selected_ws_preview.replace('/', '_')}",
-                            use_container_width=True,
-                        )
-                    with col_wb2:
-                        st.caption(
-                            f"**Location:** `workspace/{selected_ws_preview}` | **Size:** `{len(ws_content):,} bytes`"
-                        )
-
-                    # Check for sibling schema.json in project directory
-                    ws_dir_name = os.path.dirname(selected_ws_preview)
-                    sibling_schema = (
-                        os.path.join(WORKSPACE_DIR, ws_dir_name, "schema.json")
-                        if ws_dir_name
-                        else ""
-                    )
-                    has_sibling_schema = os.path.exists(sibling_schema)
-
-                    if has_sibling_schema and selected_ws_preview.lower().endswith(
-                        (".html", ".htm")
-                    ):
-                        tab_prev_ui, tab_prev_schema, tab_prev_code = st.tabs(
-                            [
-                                "🌐 Live Interactive UI Preview",
-                                "📊 Project Schema & Mock Data (schema.json)",
-                                "💻 Source Code Inspector",
-                            ]
-                        )
-                        with tab_prev_ui:
-                            components.html(ws_content, height=650, scrolling=True)
-                        with tab_prev_schema:
-                            try:
-                                with open(
-                                    sibling_schema, "r", encoding="utf-8"
-                                ) as sc_f:
-                                    sc_content = sc_f.read()
-                                st.download_button(
-                                    "📥 Download Schema JSON",
-                                    data=sc_content,
-                                    file_name="schema.json",
-                                    mime="application/json",
-                                    key=f"dl_schema_{selected_ws_preview.replace('/', '_')}",
-                                )
-                                st.code(sc_content, language="json")
-                            except Exception as sc_err:
-                                st.warning(f"Could not load schema.json: {sc_err}")
-                        with tab_prev_code:
-                            st.code(ws_content, language="html")
-                    else:
-                        tab_prev_ui, tab_prev_code = st.tabs(
-                            [
-                                "🌐 Live Interactive UI Preview",
-                                "💻 Source Code Inspector",
-                            ]
-                        )
-                        with tab_prev_ui:
-                            if selected_ws_preview.lower().endswith((".html", ".htm")):
-                                components.html(ws_content, height=650, scrolling=True)
-                            else:
-                                st.info(
-                                    "Non-HTML file. Inspect full source in the 'Source Code Inspector' tab."
-                                )
-                        with tab_prev_code:
-                            lang_fmt = (
-                                "html"
-                                if selected_ws_preview.endswith(".html")
-                                else (
-                                    "python"
-                                    if selected_ws_preview.endswith(".py")
-                                    else (
-                                        "json"
-                                        if selected_ws_preview.endswith(".json")
-                                        else "text"
-                                    )
-                                )
-                            )
-                            st.code(ws_content, language=lang_fmt)
-
-    with view_source_tab2:
-        st.markdown("#### 📦 Versioned Output Artifacts")
-        db_artifacts = load_db()
-        completed_tasks = [
-            t
-            for t in db_artifacts.get("tasks", {}).values()
-            if t.get("status") == "COMPLETED"
-            and t.get("output_file")
-            and os.path.exists(t.get("output_file"))
-        ]
-
-        if not completed_tasks:
-            st.info("No completed output artifacts available yet.")
-        else:
-            chosen_task = st.selectbox(
-                "Select Output Artifact to View:",
-                completed_tasks,
-                format_func=lambda t: f"{os.path.basename(t['output_file'])} — {t['title']} ({t.get('duration_seconds', 0)}s)",
-                key="output_artifact_select",
-            )
-
-            if chosen_task:
-                file_path = chosen_task["output_file"]
-                try:
-                    with open(file_path, "r", encoding="utf-8") as af:
-                        artifact_content = af.read()
-
-                    col_btn1, col_btn2 = st.columns([1, 4])
-                    with col_btn1:
-                        st.download_button(
-                            label="📥 Download Code File",
-                            data=artifact_content,
-                            file_name=os.path.basename(file_path),
-                            mime=(
-                                "text/html"
-                                if file_path.endswith(".html")
-                                else "text/plain"
-                            ),
-                            use_container_width=True,
-                            key=f"dl_out_{os.path.basename(file_path)}",
-                        )
-                    with col_btn2:
-                        st.caption(
-                            f"**Stored at:** `{file_path}` | **Size:** `{len(artifact_content):,} bytes`"
-                        )
-
-                    sub_preview, sub_code = st.tabs(
-                        ["🌐 Live Interactive UI Preview", "💻 Source Code Inspector"]
-                    )
-
-                    with sub_preview:
-                        if file_path.endswith(".html"):
-                            components.html(
-                                artifact_content, height=650, scrolling=True
-                            )
-                        else:
-                            st.write(
-                                "This artifact is a script/code file. View its source in the Inspector tab."
-                            )
-
-                    with sub_code:
-                        code_lang = (
-                            "html"
-                            if file_path.endswith(".html")
-                            else ("python" if file_path.endswith(".py") else "text")
-                        )
-                        st.code(artifact_content, language=code_lang)
-
-                except Exception as read_err:
-                    st.error(f"Error reading artifact file: {read_err}")
+if view_selection == "🎙️ Agent Hub (Mobile)":
+    # Zero-scroll mobile Agent Hub view
+    render_zone_center()
+elif view_selection == "👁️ Project View (Mobile)":
+    # Zero-scroll mobile Project Viewer
+    render_zone_right()
+else:
+    # Desktop 3-Zone Grid (>= 900px)
+    col_zone_left, col_zone_center, col_zone_right = st.columns([1, 1.45, 1.45])
+    with col_zone_left:
+        render_zone_left()
+    with col_zone_center:
+        render_zone_center()
+    with col_zone_right:
+        render_zone_right()
