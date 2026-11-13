@@ -327,8 +327,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# SRI AI Bespoke Obsidian & Tiger-Gold Bridge
-from sri_ui_bridge import inject_sri_ui_and_particles, render_3d_golden_orb
+# SRI AI Zero-Failure Full-Viewport UI Component
+from sri_zero_failure_ui import render_sri_zero_failure_ui
 
 # Custom Styling: Deep Obsidian & Amber Gold
 st.markdown(
@@ -3890,8 +3890,6 @@ def render_sticky_top_header():
     st.markdown(header_html, unsafe_allow_html=True)
 
 
-# Render Obsidian Canvas, Floating Gold Particles & Sticky Top Header via SRI UI Bridge
-inject_sri_ui_and_particles()
 
 
 # ==============================================================================
@@ -4372,136 +4370,42 @@ def render_persistent_live_task_tracker():
 
 
 # ==============================================================================
-# 11. RESPONSIVE SPATIAL MAIN SCREEN: DESKTOP 3-ZONE GRID (NO TOP RADIO)
+# 11. SRI ZERO-FAILURE FRONTEND ENGINE & COMMAND ROUTER
 # ==============================================================================
 restore_session_state_on_wakeup()
 
-# Dynamic Greeting based on time of day
-current_hour = datetime.now().hour
-greeting_period = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 17 else "Good evening")
-user_greeting = f"{greeting_period}, Kirubha — Agent Live"
+# 1. Read query params command and route directly to agent/voice handler
+cmd = st.query_params.get("sri_cmd")
+if cmd:
+    # Clear query param immediately so it runs only once
+    try:
+        del st.query_params["sri_cmd"]
+        if "ts" in st.query_params:
+            del st.query_params["ts"]
+    except Exception:
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
 
-
-# ------------------------------------------------------------------------------
-# RENDER ZONE 1: GREETING & RUNTIME METRICS
-# ------------------------------------------------------------------------------
-def render_zone_left():
-    db_state = load_db()
-    metrics = db_state.get("metrics", {})
-    all_tasks = db_state.get("tasks", {})
-
-    running_count = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
-    completed_count = metrics.get("completed_tasks", 0)
-    failed_count = metrics.get("failed_tasks", 0)
-
-    # Dynamic time-of-day greeting matching reference UI
-    current_hour = datetime.now().hour
-    g_time = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 17 else "Good evening")
-    user_greet_sub = f"{g_time}, Kirubha"
-
-    left_html = f"""
-    <div style="padding: 2px 4px;">
-        <div class="left-zone-greeting">{user_greet_sub}</div>
-        <div class="left-zone-title">Agent Live</div>
-        <div class="metrics-list-card">
-            <div class="metric-row">
-                <span class="metric-label">Agent Status:</span>
-                <span class="metric-val-status"><span class="gold-dot">●</span> SRI (Ready)</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Active Tasks:</span>
-                <span class="metric-val"><span class="metric-dot">●</span> {running_count}</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Completed:</span>
-                <span class="metric-val"><span class="metric-dot">●</span> {completed_count}</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Failed:</span>
-                <span class="metric-val"><span class="metric-dot">●</span> {failed_count}</span>
-            </div>
-        </div>
-        <div class="env-runtime-heading">Environment & Runtime</div>
-        <div class="runtime-pills-row">
-            <span class="runtime-pill">Streamlit Cloud</span>
-            <span class="runtime-pill runtime-pill-gold">workspace/</span>
-        </div>
-    </div>
-    """
-    st.markdown(left_html, unsafe_allow_html=True)
-
-
-# ------------------------------------------------------------------------------
-# RENDER ZONE 2: 3D GOLDEN VOICE ORB, SINGLE-ROW PILLS & UNIFIED PROMPT BAR
-# ------------------------------------------------------------------------------
-def render_zone_center():
-    # Persistent Live Task Tracker at top of Center Zone
-    render_persistent_live_task_tracker()
-
-    # EXACT 3D Golden Particle Sphere via SRI UI Bridge
-    render_3d_golden_orb()
-
-    # Carousel pills with chevrons < Student Dashboard SaaS Auth Kanban Board Refine login.html >
-    col_prev, col_p1, col_p2, col_p3, col_p4, col_next = st.columns([0.35, 2.7, 2.1, 2.4, 2.7, 0.35])
-    with col_prev:
-        st.markdown("<div style='text-align: center; color: #64748B; font-size: 1rem; padding-top: 6px;'>&lt;</div>", unsafe_allow_html=True)
-    with col_p1:
-        if st.button("Student Dashboard", key="pill_student_db", use_container_width=True):
-            st.session_state["task_prompt_val"] = "Build a responsive, modern student dashboard in HTML/CSS/JS with course progress charts, assignment tracker, and dark mode toggle."
-            st.session_state["task_folder_val"] = "student_dashboard"
-    with col_p2:
-        if st.button("SaaS Auth", key="pill_saas_auth", use_container_width=True):
-            st.session_state["task_prompt_val"] = "Create a sleek, modern SaaS Login and Registration page with tab switching, password strength meter, and social login buttons."
-            st.session_state["task_folder_val"] = "saas_auth"
-    with col_p3:
-        if st.button("Kanban Board", key="pill_kanban", use_container_width=True):
-            st.session_state["task_prompt_val"] = "Build an interactive Kanban board UI in single-file HTML/CSS/JS with drag-and-drop task cards, category columns, and task addition modal."
-            st.session_state["task_folder_val"] = "kanban_board"
-    with col_p4:
-        if st.button("Refine login.html", key="pill_refine_login", use_container_width=True):
-            st.session_state["task_prompt_val"] = "Refine workspace/login.html by adding password recovery modal, dark glassmorphism, and responsive validation."
-            st.session_state["task_folder_val"] = ""
-    with col_next:
-        st.markdown("<div style='text-align: center; color: #64748B; font-size: 1rem; padding-top: 6px;'>&gt;</div>", unsafe_allow_html=True)
-
-    st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-
-    # Gold-bordered prompt bar: "Ask SRI Agent a question (Tamil / English)..." with inline gold mic (🎙️) and send arrow (➤)
-    col_prompt_box, col_p_mic, col_p_send = st.columns([8.2, 0.9, 0.9])
-    with col_prompt_box:
-        prompt_input_text = st.text_input(
-            "Ask SRI Agent a question (Tamil / English)...",
-            value=st.session_state.get("task_prompt_val", ""),
-            placeholder="Ask SRI Agent a question (Tamil / English)...",
-            label_visibility="collapsed",
-            key="unified_prompt_text_field",
-        )
-    with col_p_mic:
-        mic_pressed = st.button("🎙️", key="unified_mic_btn", help="Click to speak via microphone", use_container_width=True)
-    with col_p_send:
-        send_pressed = st.button("➤", key="unified_send_btn", help="Send command or ask question", use_container_width=True)
-
-    # Handle Mic Click
-    if mic_pressed:
-        with st.spinner("🎙️ ஸ்ரீ கவனித்துக் கொண்டிருக்கிறது... உங்கள் கேள்வியைப் பேசுங்கள்:"):
-            try:
+    if cmd == "VOICE_TRIGGER":
+        try:
+            with st.spinner("🎙️ ஸ்ரீ கவனித்துக் கொண்டிருக்கிறது... பேசுங்கள்:"):
                 spoken = sri_universal_router.listen_voice_command()
                 if spoken:
-                    st.session_state["task_prompt_val"] = spoken
-                    st.session_state["active_voice_query"] = spoken
-                    st.toast(f"குரல் பெறப்பட்டது: {spoken}")
-                    st.rerun()
+                    cmd = spoken
+                    st.toast(f"குரல் பெறப்பட்டது: {spoken}", icon="🎙️")
                 else:
-                    st.info("⚠️ மைக்ரோஃபோன் சிக்னல் கிடைக்கவில்லை. பெட்டியில் டைப் செய்யலாம்.")
-            except Exception as me:
-                st.warning(f"Microphone notice: {me}")
+                    st.toast("⚠️ மைக்ரோஃபோன் சிக்னல் கிடைக்கவில்லை (Microphone timeout).", icon="🎙️")
+                    cmd = None
+        except Exception as ve:
+            st.warning(f"Microphone notice: {ve}")
+            cmd = None
 
-    # Handle Send / Execution
-    effective_prompt = prompt_input_text.strip()
-    if send_pressed and effective_prompt:
+    if cmd and cmd != "VOICE_TRIGGER":
+        effective_prompt = str(cmd).strip()
         st.session_state["task_prompt_val"] = effective_prompt
 
-        # Check if it is a Status/Inquiry Query
         query_lower = effective_prompt.lower()
         is_inquiry = any(k in query_lower for k in [
             "எங்க", "என்ன பண்ணுது", "மாடல்", "முடிஞ்சு", "status", "where is", "what is",
@@ -4510,6 +4414,12 @@ def render_zone_center():
 
         if is_inquiry:
             st.session_state["active_voice_query"] = effective_prompt
+            reply_dict = get_agent_voice_status_reply(effective_prompt)
+            st.toast(f"🤖 SRI: {reply_dict['spoken_text']}", icon="🗣️")
+            tts_html = generate_speech_synthesis_html(
+                reply_dict["spoken_text"], lang=reply_dict["lang"], autoplay=True
+            )
+            components.html(tts_html, height=0)
         else:
             # Autonomous Task Dispatch
             folder_target = st.session_state.get("task_folder_val", "").strip() or "student_learning_hub"
@@ -4519,128 +4429,44 @@ def render_zone_center():
                 task_type=task_kind,
                 folder_name=folder_target,
             )
-            st.success(f"🚀 Task dispatched autonomously! Task ID: `{new_t_id}`")
-            st.toast("Task executing in background!")
+            st.toast(f"🚀 Task dispatched autonomously! ID: {new_t_id}", icon="⚡")
 
-    # Live Spoken Agent Reply Card (if voice query active)
-    active_q = st.session_state.get("active_voice_query", "").strip()
-    if active_q:
-        reply_dict = get_agent_voice_status_reply(active_q)
-        st.markdown(
-            f"""
-            <div style="background: rgba(18, 22, 33, 0.95); border: 1.5px solid #F59E0B; border-radius: 12px;
-                        padding: 16px 20px; margin-top: 14px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.2);">
-                <div style="font-size: 0.8rem; color: #FBBF24; margin-bottom: 4px; font-weight: 700;">
-                    👤 உங்கள் கேள்வி (User Inquiry):
-                </div>
-                <div style="font-size: 1rem; color: #FFFFFF; font-weight: 600; margin-bottom: 12px;">
-                    "{html.escape(active_q)}"
-                </div>
-                <div style="font-size: 0.8rem; color: #34D399; margin-bottom: 6px; font-weight: 700;">
-                    🤖 SRI Agent நேரலை பதில் (Live Agent Status Reply):
-                </div>
-                <div style="font-size: 0.92rem; color: #F1F5F9; line-height: 1.6;">
-                    {reply_dict['display_text']}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        tts_html = generate_speech_synthesis_html(
-            reply_dict["spoken_text"], lang=reply_dict["lang"], autoplay=True
-        )
-        components.html(tts_html, height=135)
+# 2. Gather live telemetry and project files for Zero-Failure UI
+db_state = load_db()
+metrics = db_state.get("metrics", {})
+all_tasks = db_state.get("tasks", {})
 
+running_count = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
+completed_count = metrics.get("completed_tasks", 0)
+failed_count = metrics.get("failed_tasks", 0)
+agent_status_str = "SRI (Active)" if running_count > 0 else "SRI (Ready)"
 
-# ------------------------------------------------------------------------------
-# RENDER ZONE 3: SEGMENTED [ PREVIEW | CODE ] PROJECT VIEWER
-# ------------------------------------------------------------------------------
-def render_zone_right():
-    # Segmented Switcher [ Preview | Code ] in Pill Track (Zero native radio dots)
-    col_seg, col_exp = st.columns([2.3, 0.7])
-    with col_seg:
-        viewer_mode = st.radio(
-            "Viewer Mode",
-            options=["Preview", "Code"],
-            index=0,
-            horizontal=True,
-            label_visibility="collapsed",
-            key="sri_segmented_viewer_mode",
-        )
-    with col_exp:
-        full_height_toggle = st.toggle("⛶", value=False, key="pv_expand_toggle", help="Full Height Preview")
-
-    # Target file: default to workspace/login.html if present
-    target_rel = "login.html"
+# Target workspace file
+target_rel = "login.html"
+target_full = os.path.join(WORKSPACE_DIR, target_rel)
+if not os.path.exists(target_full):
+    ws_files = get_workspace_files()
+    target_rel = ws_files[0] if ws_files else "login.html"
     target_full = os.path.join(WORKSPACE_DIR, target_rel)
-    if not os.path.exists(target_full):
-        ws_files = get_workspace_files()
-        target_rel = ws_files[0] if ws_files else "login.html"
-        target_full = os.path.join(WORKSPACE_DIR, target_rel)
 
-    content = ""
-    file_size_bytes = 1881
-    if os.path.exists(target_full):
-        try:
-            with open(target_full, "r", encoding="utf-8") as f:
-                content = f.read()
-            file_size_bytes = len(content.encode("utf-8"))
-        except Exception:
-            pass
+generated_code = ""
+if os.path.exists(target_full):
+    try:
+        with open(target_full, "r", encoding="utf-8") as f:
+            generated_code = f.read()
+    except Exception:
+        generated_code = ""
 
-    preview_h = 750 if full_height_toggle else 430
+workspace_file_label = f"workspace/{target_rel}"
+generated_preview_html = generated_code
 
-    # Header metadata: workspace/login.html size: 1,881 bytes
-    st.markdown(
-        f"""
-        <div class="pv-meta-header">
-            <span class="pv-file-path">workspace/{html.escape(target_rel)}</span>
-            <span class="pv-file-size">size: {file_size_bytes:,} bytes</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if viewer_mode == "Preview":
-        if content:
-            components.html(content, height=preview_h, scrolling=True)
-        else:
-            st.info("No content in workspace/login.html yet.")
-    else:
-        # Code View with Download options
-        col_dl1, col_dl2 = st.columns(2)
-        with col_dl1:
-            st.download_button(
-                "📥 Download File",
-                data=content,
-                file_name=os.path.basename(target_full),
-                mime="text/html",
-                use_container_width=True,
-                key=f"dl_single_{os.path.basename(target_full)}",
-            )
-        with col_dl2:
-            zip_bytes = create_project_zip_bundle(WORKSPACE_DIR)
-            st.download_button(
-                "📦 Download .ZIP",
-                data=zip_bytes,
-                file_name="workspace_project.zip",
-                mime="application/zip",
-                use_container_width=True,
-                key="dl_zip_right_zone",
-            )
-        st.code(content, language="html", line_numbers=True)
-
-    # 4-pointed sparkle icon at bottom right of the container
-    st.markdown("<div class='pv-sparkle-decor'>✦</div>", unsafe_allow_html=True)
-
-
-# ------------------------------------------------------------------------------
-# RENDER DESKTOP 3-ZONE SPATIAL GRID (25% Left, 45% Center, 30% Right)
-# ------------------------------------------------------------------------------
-col_zone_left, col_zone_center, col_zone_right = st.columns([1, 1.8, 1.2])
-with col_zone_left:
-    render_zone_left()
-with col_zone_center:
-    render_zone_center()
-with col_zone_right:
-    render_zone_right()
+# 3. Call render_sri_zero_failure_ui to render the full-viewport UI
+render_sri_zero_failure_ui(
+    agent_status=agent_status_str,
+    active_tasks=running_count,
+    completed_tasks=completed_count,
+    failed_tasks=failed_count,
+    workspace_file=workspace_file_label,
+    generated_code=generated_code,
+    generated_preview_html=generated_preview_html,
+)
