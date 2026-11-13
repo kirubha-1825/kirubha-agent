@@ -12,17 +12,9 @@ def render_sri_zero_failure_ui(
     generated_preview_html="",
     chat_history=None
 ):
-    """
-    Zero-Failure Full-Viewport Custom HTML/JS UI Component for SRI AI.
-    - Completely bypasses Streamlit's default CSS/layout conflicts (no red radio dots, no stacked mobile pills).
-    - Automatically renders Mobile App View (< 900px) with 17 full-bleed golden sine-waves & 2-page switcher,
-      and Desktop 3-Zone View (>= 900px) with 2-orbit microphone sphere & [ Preview | Code ] glass container.
-    - Bridges user prompts, quick-action triggers, and client-side Web Speech recognition directly back to Python.
-    """
     if chat_history is None:
         chat_history = []
 
-    # Hide Streamlit's outer padding/chrome completely & ensure iframe gets microphone permissions
     st.markdown("""
     <style>
     html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .main {
@@ -31,41 +23,18 @@ def render_sri_zero_failure_ui(
         padding: 0 !important;
         overflow: hidden !important;
     }
-    [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu, footer {
+    [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu, footer, [data-testid="stHeader"] {
         display: none !important;
-    }
-    [data-testid="stHeader"] {
-        background: transparent !important;
-        height: 0px !important;
-        overflow: visible !important;
-        border: none !important;
     }
     .block-container {
         padding: 0 !important;
         margin: 0 !important;
         max-width: 100vw !important;
     }
-    /* Style the Control Drawer (st.sidebar) when opened for the 7 Backend Settings */
     [data-testid="stSidebar"] {
         background-color: #090B0E !important;
         border-left: 1px solid rgba(245, 158, 11, 0.35) !important;
         z-index: 99999 !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stExpander"] {
-        background: #0D1015 !important;
-        border: 1px solid #1E222B !important;
-        border-radius: 12px !important;
-        margin-bottom: 8px !important;
-    }
-    [data-testid="stSidebar"] .stButton > button {
-        background: #0C0E12 !important;
-        border: 1px solid #1E222B !important;
-        border-radius: 999px !important;
-        color: #E5E7EB !important;
-    }
-    [data-testid="stSidebar"] .stButton > button:hover {
-        border-color: #F59E0B !important;
-        color: #F59E0B !important;
     }
     iframe {
         display: block !important;
@@ -74,16 +43,6 @@ def render_sri_zero_failure_ui(
         height: 100vh !important;
     }
     </style>
-    <script>
-    (function allowIframeMic() {
-        try {
-            const iframes = document.querySelectorAll('iframe');
-            iframes.forEach(f => {
-                f.setAttribute('allow', 'microphone; camera; speech-recognition; autoplay');
-            });
-        } catch(e) {}
-    })();
-    </script>
     """, unsafe_allow_html=True)
 
     state_payload = json.dumps({
@@ -108,9 +67,8 @@ def render_sri_zero_failure_ui(
     box-sizing: border-box;
     margin: 0;
     padding: 0;
-    -webkit-tap-highlight-color: transparent !important;
-    -webkit-tap-highlight-color: rgba(0,0,0,0) !important;
-    outline: none !important;
+    -webkit-tap-highlight-color: transparent;
+    outline: none;
   }}
   body {{
     background: #060709;
@@ -121,142 +79,98 @@ def render_sri_zero_failure_ui(
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    -webkit-tap-highlight-color: transparent !important;
   }}
 
-  /* Top Sticky Header */
+  /* Top Header */
   .topbar {{
     height: 58px;
-    background: rgba(6, 7, 9, 0.94);
-    border-bottom: 1px solid #1E222B;
+    padding: 0 18px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 22px;
     flex-shrink: 0;
-    z-index: 20;
   }}
   .brand {{
     font-family: 'Playfair Display', serif;
-    font-size: 23px;
+    font-size: 22px;
     font-weight: 700;
     color: #F5E6C8;
-    letter-spacing: 0.3px;
   }}
   .brand span {{ color: #F59E0B; }}
+  .right-controls {{ display: flex; align-items: center; gap: 10px; }}
   .status-pill {{
-    background: #0C0E12;
-    border: 1px solid rgba(245, 158, 11, 0.38);
+    background: #0B1312;
+    border: 1px solid rgba(16, 185, 129, 0.35);
     border-radius: 999px;
-    padding: 5px 14px;
-    font-size: 12px;
-    color: #E5E7EB;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }}
-  .dot-gold {{
-    width: 7px; height: 7px; border-radius: 50%;
-    background: #F59E0B; box-shadow: 0 0 8px #F59E0B;
-  }}
-  .gear-btn {{
-    background: #0C0E12;
-    border: 1px solid rgba(245, 158, 11, 0.5);
-    color: #F59E0B;
-    border-radius: 999px;
-    padding: 6px 14px;
-    font-size: 12.5px;
-    font-weight: 500;
-    cursor: pointer;
+    padding: 5px 12px;
+    font-size: 11.5px;
+    color: #34D399;
     display: flex;
     align-items: center;
     gap: 6px;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
+    font-weight: 500;
   }}
-  .gear-btn:hover {{ background: #141821; }}
+  .dot-green {{
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #10B981; box-shadow: 0 0 8px #10B981;
+  }}
+  .gear-btn {{
+    width: 34px; height: 34px;
+    background: #111318;
+    border: 1px solid #242832;
+    color: #9CA3AF;
+    border-radius: 50%;
+    font-size: 15px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }}
 
-  /* Compact Welcome Kirubha + Latest Work → Row (Mobile prominent) */
-  .welcome-bar {{
-    display: none;
+  /* Welcome Kirubha + Latest Work Row (Mobile & Subheader) */
+  .welcome-row {{
+    padding: 4px 18px 8px 18px;
+    display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 18px 4px 18px;
     flex-shrink: 0;
-    z-index: 10;
   }}
-  .welcome-col {{
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }}
-  .welcome-sub {{
-    font-size: 11.5px;
+  .welcome-sub {{ color: #D97706; font-size: 12px; font-weight: 500; }}
+  .welcome-name {{ color: #FFFFFF; font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }}
+  .latest-btn {{
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.4);
     color: #D97706;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-  }}
-  .welcome-name {{
-    font-size: 20px;
-    font-weight: 700;
-    color: #FFFFFF;
-    font-family: 'Inter', sans-serif;
-    line-height: 1.2;
-  }}
-  .latest-work-btn {{
-    background: #0C0E12;
-    border: 1px solid rgba(245, 158, 11, 0.45);
-    color: #F59E0B;
     border-radius: 999px;
-    padding: 5px 14px;
+    padding: 6px 14px;
     font-size: 11.5px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
-    outline: none;
-  }}
-  .latest-work-btn:hover {{
-    background: #141821;
-    border-color: #F59E0B;
-    box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);
   }}
 
-  /* Main Workspace Grid */
+  /* Main Layout */
   .main-grid {{
     flex: 1;
     display: grid;
     grid-template-columns: 270px 1fr 390px;
     gap: 18px;
-    padding: 14px 22px;
+    padding: 12px 22px;
     overflow: hidden;
   }}
-
-  /* Left Telemetry (Desktop Only) */
   .left-col {{
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    padding-right: 8px;
+    display: flex; flex-direction: column; justify-content: space-between;
   }}
-  .greet {{ color: #D97706; font-size: 14px; margin-bottom: 2px; }}
-  .hero-title {{ font-family: 'Playfair Display', serif; font-size: 32px; color: #FFF; margin-bottom: 16px; }}
   .stat-row {{
     display: flex; justify-content: space-between; padding: 10px 0;
     border-bottom: 1px solid #181B22; font-size: 13.5px; color: #9CA3AF;
   }}
   .gold-val {{ color: #F59E0B; font-weight: 600; }}
 
-  /* Center Orb & Action Zone */
+  /* Center Orb & Bottom Controls */
   .center-col {{
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: space-between;
-    position: relative;
     overflow: hidden;
-    padding-bottom: 4px;
   }}
   .orb-wrap {{
     flex: 1;
@@ -265,28 +179,25 @@ def render_sri_zero_failure_ui(
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    position: relative;
   }}
   canvas#sriOrb {{
     width: 100%;
-    height: 280px;
+    height: 270px;
     cursor: pointer;
-    -webkit-tap-highlight-color: transparent !important;
-    -webkit-tap-highlight-color: rgba(0,0,0,0) !important;
-    outline: none !important;
-    user-select: none !important;
-    touch-action: manipulation;
+    user-select: none;
   }}
   .orb-hint {{
     font-size: 12px;
     color: #71717A;
-    margin-top: 4px;
+    margin-top: 6px;
     text-align: center;
-    min-height: 20px;
-    transition: all 0.2s;
+  }}
+  .orb-hint.listening {{
+    color: #F59E0B;
+    font-weight: 600;
   }}
 
-  /* Horizontal Swipeable Action Pills */
+  /* Horizontal Action Pills */
   .pills-row {{
     display: flex;
     flex-direction: row;
@@ -294,7 +205,7 @@ def render_sri_zero_failure_ui(
     gap: 8px;
     width: 100%;
     overflow-x: auto;
-    padding: 6px 2px;
+    padding: 6px 0;
     justify-content: center;
     scrollbar-width: none;
   }}
@@ -302,28 +213,28 @@ def render_sri_zero_failure_ui(
   .pill-btn {{
     flex: 0 0 auto;
     background: #0C0E12;
-    border: 1px solid rgba(245, 158, 11, 0.35);
-    color: #E5E7EB;
+    border: 1px solid #222630;
+    color: #D4D4D8;
     border-radius: 999px;
     padding: 7px 14px;
     font-size: 12px;
     cursor: pointer;
     white-space: nowrap;
-    transition: 0.2s;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
   }}
-  .pill-btn:hover {{ border-color: #F59E0B; color: #F59E0B; }}
+  .pill-btn:first-child {{
+    border-color: rgba(245, 158, 11, 0.55);
+    color: #F59E0B;
+  }}
 
-  /* Unified Bottom Chat Bar */
+  /* Unified Chat Bar */
   .chat-bar {{
     width: 100%;
     background: #0C0E12;
-    border: 1px solid rgba(245, 158, 11, 0.45);
+    border: 1px solid #222630;
     border-radius: 999px;
     display: flex;
     align-items: center;
-    padding: 5px 8px 5px 16px;
+    padding: 5px 6px 5px 16px;
     gap: 8px;
     margin-top: 6px;
   }}
@@ -331,25 +242,30 @@ def render_sri_zero_failure_ui(
     flex: 1;
     background: transparent;
     border: none;
-    outline: none;
     color: #FFF;
     font-size: 13.5px;
   }}
-  .icon-btn {{
-    width: 34px; height: 34px; border-radius: 50%;
-    border: 1px solid #27272A; background: #14171F;
-    color: #F59E0B; cursor: pointer; display: flex;
-    align-items: center; justify-content: center; font-size: 14px;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
-    transition: all 0.2s;
+  .mic-inline {{
+    background: transparent;
+    border: none;
+    color: #9CA3AF;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 6px;
   }}
-  .send-btn {{
-    background: linear-gradient(135deg, #F59E0B, #D97706);
-    color: #060709; border: none; font-weight: 700;
+  .send-circle {{
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: #F59E0B;
+    color: #060709;
+    border: none;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
   }}
 
-  /* Right Glass Card ([ Preview | Code ]) */
+  /* Right Glass Panel */
   .right-col {{
     background: #0A0C10;
     border: 1px solid rgba(245, 158, 11, 0.3);
@@ -370,130 +286,82 @@ def render_sri_zero_failure_ui(
   .seg-tab {{
     flex: 1; text-align: center; padding: 6px 10px;
     border-radius: 999px; font-size: 12.5px; color: #9CA3AF;
-    cursor: pointer; border: 1px solid transparent;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
+    cursor: pointer;
   }}
   .seg-tab.active {{
-    background: #141821; border-color: #F59E0B; color: #FFF; font-weight: 600;
+    background: #141821; border: 1px solid #F59E0B; color: #FFF; font-weight: 600;
   }}
-  .file-tag {{ font-size: 11px; color: #71717A; margin-bottom: 8px; font-family: 'JetBrains Mono', monospace; }}
   .workspace-pane {{
     flex: 1; background: #060709; border: 1px solid #181B22;
     border-radius: 12px; overflow: auto; padding: 12px;
     font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #E5E7EB;
   }}
 
-  /* Mobile Bottom 2-Page Switcher (Hidden on Desktop) */
+  /* Bottom 2-Pill Switcher (Matching 1000102295.jpg) */
   .mob-nav {{ display: none; }}
 
-  /* MOBILE RESPONSIVE (< 900px): 2-Page App View & Exact Spacing */
   @media (max-width: 900px) {{
-    .topbar {{ padding: 0 14px; height: 54px; }}
-    .gear-label {{ display: none; }}
-    .welcome-bar {{ display: flex; }}
-    body.show-project .welcome-bar {{ display: none; }}
-
     .main-grid {{
       display: flex;
       flex-direction: column;
-      flex: 1;
-      padding: 4px 14px 6px 14px;
-      overflow: hidden;
+      padding: 4px 16px 8px 16px;
     }}
     .left-col {{ display: none !important; }}
-    .center-col {{
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding-bottom: 12px;
-      overflow: hidden;
-    }}
-    .pills-row {{
-      justify-content: flex-start;
-      margin-bottom: 4px;
-    }}
-    .right-col {{
-      display: none;
-      flex: 1;
-      height: 100%;
-    }}
+    .pills-row {{ justify-content: flex-start; }}
+    .right-col {{ display: none; flex: 1; }}
     body.show-project .center-col {{ display: none; }}
     body.show-project .right-col {{ display: flex; }}
 
-    /* Bottom 2-Page Switcher styled as rounded pills with solid gold fill */
     .mob-nav {{
       display: flex;
-      align-items: center;
       justify-content: center;
-      background: #0A0C10;
-      border: 1px solid #1E222B;
-      border-radius: 999px;
-      padding: 4px;
-      margin: 6px 14px 14px 14px;
-      gap: 6px;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px 18px 16px;
       flex-shrink: 0;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
     }}
-    .mob-nav-btn {{
-      flex: 1;
-      text-align: center;
-      padding: 8px 14px;
+    .mob-pill {{
+      padding: 9px 18px;
       border-radius: 999px;
       font-size: 12.5px;
       font-weight: 600;
-      background: transparent;
-      border: 1px solid transparent;
-      color: #9CA3AF;
       cursor: pointer;
+      border: 1px solid #222630;
+      background: #0C0E12;
+      color: #9CA3AF;
       display: flex;
       align-items: center;
-      justify-content: center;
       gap: 6px;
-      transition: all 0.2s ease;
-      -webkit-tap-highlight-color: transparent;
-      user-select: none;
-      outline: none;
     }}
-    .mob-nav-btn.active {{
-      background: #F59E0B !important;
-      color: #060709 !important;
-      border: 1px solid #F59E0B !important;
-      font-weight: 700 !important;
-      box-shadow: 0 0 16px rgba(245, 158, 11, 0.4);
+    .mob-pill.active {{
+      background: #F59E0B;
+      color: #060709;
+      border-color: #F59E0B;
     }}
-  }}
-
-  @keyframes pulseDot {{
-    0% {{ transform: scale(0.9); opacity: 0.7; }}
-    100% {{ transform: scale(1.3); opacity: 1; box-shadow: 0 0 12px #F59E0B; }}
   }}
 </style>
 </head>
 <body>
-  <!-- Topbar -->
   <div class="topbar">
     <div class="brand">SRI AI<span>.</span></div>
-    <div class="status-pill"><span class="dot-gold"></span> <span id="hdrStatus">98.4% Agent Active</span></div>
-    <button class="gear-btn" onclick="openBackendSettings()">⚙️ <span class="gear-label">Control Drawer</span></button>
+    <div class="right-controls">
+      <div class="status-pill"><span class="dot-green"></span> 24/7 Active</div>
+      <button class="gear-btn" onclick="openBackendSettings()">⚙️</button>
+    </div>
   </div>
 
-  <!-- Mobile Welcome + Latest Work Row -->
-  <div class="welcome-bar">
-    <div class="welcome-col">
-      <span class="welcome-sub">Welcome</span>
-      <span class="welcome-name">Kirubha</span>
+  <div class="welcome-row">
+    <div>
+      <div class="welcome-sub">Welcome</div>
+      <div class="welcome-name">Kirubha</div>
     </div>
-    <button class="latest-work-btn" onclick="setMobilePage('project')">Latest Work →</button>
+    <button class="latest-btn" onclick="setMobilePage('project')">Latest Work →</button>
   </div>
 
   <div class="main-grid">
-    <!-- Left Telemetry (Desktop) -->
     <div class="left-col">
       <div>
-        <div class="greet">Good morning, Kirubha</div>
-        <div class="hero-title">Agent Live</div>
+        <div style="font-family:'Playfair Display',serif;font-size:26px;color:#FFF;margin-bottom:14px;">Agent Live</div>
         <div class="stat-row"><span>Agent Status</span><span class="gold-val" id="stAgent">● SRI (Ready)</span></div>
         <div class="stat-row"><span>Active Tasks</span><span class="gold-val" id="stActive">0</span></div>
         <div class="stat-row"><span>Completed</span><span class="gold-val" id="stComp">0</span></div>
@@ -502,10 +370,9 @@ def render_sri_zero_failure_ui(
       <div style="font-size:12px;color:#71717A;">Environment: <span style="color:#E5E7EB;">Streamlit Cloud workspace/</span></div>
     </div>
 
-    <!-- Center Orb & Unified Chat -->
     <div class="center-col">
       <div class="orb-wrap">
-        <canvas id="sriOrb" onclick="startVoiceCapture()"></canvas>
+        <canvas id="sriOrb" onclick="startClientVoice()"></canvas>
         <div class="orb-hint" id="orbHint">Tap the golden sphere to talk with SRI in Tamil or English</div>
       </div>
 
@@ -517,29 +384,27 @@ def render_sri_zero_failure_ui(
           <button class="pill-btn" onclick="sendToPython('Refine login.html')">Refine login.html</button>
         </div>
         <div class="chat-bar">
-          <input id="promptInput" type="text" placeholder="Ask SRI Agent a question (Tamil / English)..." onkeydown="if(event.key==='Enter') submitPrompt()">
-          <button class="icon-btn" id="micBtn" onclick="startVoiceCapture()" title="Voice">🎤</button>
-          <button class="icon-btn send-btn" onclick="submitPrompt()" title="Send">➤</button>
+          <input id="promptInput" type="text" placeholder="Message SRI..." onkeydown="if(event.key==='Enter') submitPrompt()">
+          <button class="mic-inline" onclick="startClientVoice()">🎙️</button>
+          <button class="send-circle" onclick="submitPrompt()">➤</button>
         </div>
       </div>
     </div>
 
-    <!-- Right Workspace ([ Preview | Code ]) -->
     <div class="right-col">
       <div class="seg-tabs">
         <div class="seg-tab active" id="tabPreview" onclick="switchTab('preview')">Preview</div>
         <div class="seg-tab" id="tabCode" onclick="switchTab('code')">Code</div>
       </div>
-      <div class="file-tag" id="fileLabel">workspace/login.html</div>
+      <div style="font-size:11px;color:#71717A;margin-bottom:8px;font-family:'JetBrains Mono',monospace;" id="fileLabel">workspace/login.html</div>
       <div class="workspace-pane" id="panePreview"></div>
       <pre class="workspace-pane" id="paneCode" style="display:none;white-space:pre-wrap;"></pre>
     </div>
   </div>
 
-  <!-- Mobile 2-Page Bottom Switcher -->
   <div class="mob-nav">
-    <div class="mob-nav-btn active" id="navHub" onclick="setMobilePage('hub')">✦ Agent Hub</div>
-    <div class="mob-nav-btn" id="navProj" onclick="setMobilePage('project')">👁️ Project View</div>
+    <div class="mob-pill active" id="navHub" onclick="setMobilePage('hub')">✦ Agent Hub</div>
+    <div class="mob-pill" id="navProj" onclick="setMobilePage('project')">👁️ Project View</div>
   </div>
 
 <script>
@@ -549,17 +414,7 @@ def render_sri_zero_failure_ui(
   document.getElementById('stComp').textContent = STATE.completed;
   document.getElementById('stFail').textContent = STATE.failed;
   document.getElementById('fileLabel').textContent = STATE.workspaceFile;
-
-  if (STATE.previewHtml && (STATE.previewHtml.includes('<!DOCTYPE') || STATE.previewHtml.includes('<html')) && !STATE.previewHtml.includes('<iframe')) {{
-    const pIframe = document.createElement('iframe');
-    pIframe.style.cssText = 'width:100%;height:100%;border:none;min-height:380px;border-radius:8px;background:#090B10;';
-    pIframe.srcdoc = STATE.previewHtml;
-    const pContainer = document.getElementById('panePreview');
-    pContainer.innerHTML = '';
-    pContainer.appendChild(pIframe);
-  }} else {{
-    document.getElementById('panePreview').innerHTML = STATE.previewHtml;
-  }}
+  document.getElementById('panePreview').innerHTML = STATE.previewHtml;
   document.getElementById('paneCode').textContent = STATE.code;
 
   function switchTab(mode) {{
@@ -577,14 +432,8 @@ def render_sri_zero_failure_ui(
   }}
 
   function openBackendSettings() {{
-    try {{
-      const doc = window.parent.document;
-      const btn = doc.querySelector('[data-testid="collapsedControl"] button') ||
-                  doc.querySelector('[data-testid="collapsedControl"]') ||
-                  doc.querySelector('button[aria-label*="sidebar"]') ||
-                  doc.querySelector('[data-testid="stSidebarCollapseButton"] button');
-      if (btn) btn.click();
-    }} catch(e) {{}}
+    const btn = window.parent.document.querySelector('[data-testid="collapsedControl"] button, [data-testid="collapsedControl"]');
+    if (btn) btn.click();
   }}
 
   function submitPrompt() {{
@@ -601,193 +450,93 @@ def render_sri_zero_failure_ui(
     window.parent.location.reload();
   }}
 
-  // -------------------------------------------------------------
-  // Client-Side Speech Recognition (ta-IN / en-IN, no page reload)
-  // -------------------------------------------------------------
+  // Client-Side Web Speech API (No Blank Black Reload or Mic Timeout!)
   let isListening = false;
-  let recognition = null;
-
-  try {{
-    const parentIframes = window.parent.document.querySelectorAll('iframe');
-    parentIframes.forEach(f => {{
-      const cur = f.getAttribute('allow') || '';
-      if (!cur.includes('microphone')) {{
-        f.setAttribute('allow', (cur ? cur + '; ' : '') + 'microphone; camera; speech-recognition; autoplay;');
-      }}
-    }});
-  }} catch(e) {{}}
-
-  function initSpeechRecognition() {{
+  function startClientVoice() {{
+    const hint = document.getElementById('orbHint');
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRec) return null;
-    const rec = new SpeechRec();
-    rec.continuous = false;
-    rec.interimResults = true;
-    rec.maxAlternatives = 1;
-    rec.lang = 'ta-IN'; // Tamil with Indian English phonetic support
-
-    rec.onstart = () => {{
-      isListening = true;
-      setOrbListeningUI(true);
-    }};
-
-    rec.onresult = (event) => {{
-      let interim = '';
-      let finalTranscript = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {{
-        if (event.results[i].isFinal) {{
-          finalTranscript += event.results[i][0].transcript;
-        }} else {{
-          interim += event.results[i][0].transcript;
-        }}
-      }}
-      const current = finalTranscript || interim;
-      if (current) {{
-        document.getElementById('promptInput').value = current;
-      }}
-      if (finalTranscript && finalTranscript.trim()) {{
-        isListening = false;
-        setOrbListeningUI(false);
-        sendToPython(finalTranscript.trim());
-      }}
-    }};
-
-    rec.onerror = (event) => {{
-      console.warn('Speech recognition notice:', event.error);
-      isListening = false;
-      setOrbListeningUI(false);
-      const hint = document.getElementById('orbHint');
-      if (event.error === 'not-allowed') {{
-        if (hint) hint.innerHTML = '<span style="color:#EF4444;">⚠️ Microphone access denied. Allow mic in browser settings.</span>';
-      }} else if (event.error !== 'no-speech') {{
-        if (hint) hint.innerHTML = 'Tap the golden sphere to talk with SRI in Tamil or English';
-      }}
-    }};
-
-    rec.onend = () => {{
-      if (isListening) {{
-        isListening = false;
-        setOrbListeningUI(false);
-        const val = document.getElementById('promptInput').value.trim();
-        if (val) {{
-          sendToPython(val);
-        }}
-      }}
-    }};
-
-    return rec;
-  }}
-
-  function startVoiceCapture() {{
-    if (isListening) {{
-      if (recognition) {{
-        try {{ recognition.stop(); }} catch(e) {{}}
-      }}
-      isListening = false;
-      setOrbListeningUI(false);
-      return;
-    }}
-
-    if (!recognition) {{
-      recognition = initSpeechRecognition();
-    }}
-
-    if (!recognition) {{
-      const hint = document.getElementById('orbHint');
-      if (hint) hint.innerHTML = '<span style="color:#F59E0B;">🎙️ Speech recognition not supported on this browser. Type below.</span>';
+    if (!SpeechRec) {{
+      hint.textContent = "Type your message below or use Chrome voice keyboard";
       document.getElementById('promptInput').focus();
       return;
     }}
+    if (isListening) return;
+    const rec = new SpeechRec();
+    rec.lang = 'ta-IN';
+    rec.interimResults = true;
+    isListening = true;
+    hint.textContent = "Listening... Speak in Tamil or English";
+    hint.classList.add('listening');
 
-    try {{
-      recognition.start();
-    }} catch(err) {{
-      try {{
-        recognition.stop();
-        setTimeout(() => {{
-          try {{ recognition.start(); }} catch(e) {{}}
-        }}, 200);
-      }} catch(e) {{}}
-    }}
+    rec.onresult = (e) => {{
+      const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
+      document.getElementById('promptInput').value = transcript;
+      if (e.results[0].isFinal) {{
+        isListening = false;
+        hint.classList.remove('listening');
+        sendToPython(transcript);
+      }}
+    }};
+    rec.onerror = () => {{
+      isListening = false;
+      hint.classList.remove('listening');
+      hint.textContent = "Tap the golden sphere to talk with SRI in Tamil or English";
+    }};
+    rec.onend = () => {{
+      isListening = false;
+      hint.classList.remove('listening');
+    }};
+    rec.start();
   }}
 
-  function setOrbListeningUI(active) {{
-    const hint = document.getElementById('orbHint');
-    const micBtn = document.getElementById('micBtn');
-    if (active) {{
-      if (hint) {{
-        hint.innerHTML = '<span style="color:#F59E0B;font-weight:600;display:inline-flex;align-items:center;gap:6px;"><span class="dot-gold" style="animation:pulseDot 0.8s infinite alternate;"></span> 🎙️ ஸ்ரீ கவனித்துக் கொண்டிருக்கிறது... பேசுங்கள் / Speak now...</span>';
-      }}
-      if (micBtn) {{
-        micBtn.style.borderColor = '#F59E0B';
-        micBtn.style.boxShadow = '0 0 14px rgba(245,158,11,0.6)';
-        micBtn.style.color = '#FBBF24';
-      }}
-    }} else {{
-      if (hint) {{
-        hint.innerHTML = 'Tap the golden sphere to talk with SRI in Tamil or English';
-      }}
-      if (micBtn) {{
-        micBtn.style.borderColor = '#27272A';
-        micBtn.style.boxShadow = 'none';
-        micBtn.style.color = '#F59E0B';
-      }}
-    }}
-  }}
-
-  // -------------------------------------------------------------
-  // 3D Golden Orb Canvas (Live Pulse on Voice Listening)
-  // -------------------------------------------------------------
+  // 3D Golden Orb Canvas
   const canvas = document.getElementById('sriOrb');
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   let t = 0;
 
-  const pts = Array.from({{length: 1000}}, () => {{
+  const pts = Array.from({{length: 1100}}, () => {{
     const u = Math.random(), v = Math.random();
     const th = 2 * Math.PI * u, ph = Math.acos(2 * v - 1);
-    return {{ th, ph, r: 1, s: Math.random() * 1.4 + 0.35 }};
+    return {{ th, ph, s: Math.random() * 1.45 + 0.35 }};
   }});
 
   function renderOrb() {{
     const W = canvas.clientWidth || 380;
-    const H = 280;
+    const H = 270;
     if (canvas.width !== W * dpr) {{
       canvas.width = W * dpr; canvas.height = H * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }}
     ctx.clearRect(0, 0, W, H);
     const isMob = window.innerWidth < 900;
-    const R = isMob ? 64 : 88;
+    const R = isMob ? 66 : 88;
     const cx = W / 2, cy = H / 2;
-    t += isListening ? 0.038 : 0.015;
+    t += isListening ? 0.04 : 0.015;
 
-    // Ambient Radial Gold Halo (Vibrant pulse when listening)
-    const g = ctx.createRadialGradient(cx, cy, 8, cx, cy, R * (isListening ? 1.75 : 1.55));
-    g.addColorStop(0, isListening ? 'rgba(245,158,11,0.56)' : 'rgba(245,158,11,0.34)');
+    const g = ctx.createRadialGradient(cx, cy, 8, cx, cy, R * 1.6);
+    g.addColorStop(0, isListening ? 'rgba(251,191,36,0.5)' : 'rgba(245,158,11,0.34)');
     g.addColorStop(1, 'rgba(6,7,9,0)');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
 
     if (isMob) {{
-      // Mobile: 17 Full-Bleed Golden Sine-Wave Ribbons
       for (let i = 0; i < 17; i++) {{
         ctx.beginPath();
         const phase = i * 0.22;
         for (let x = 0; x <= W; x += 2) {{
           const edgeFade = Math.sin((x / W) * Math.PI);
-          const y = cy + Math.sin(x * 0.018 + t * (isListening ? 2.2 : 1.3) + phase) * (25 + i * 1.55) * edgeFade;
+          const amp = isListening ? (36 + i * 2) : (25 + i * 1.55);
+          const y = cy + Math.sin(x * 0.018 + t * 1.3 + phase) * amp * edgeFade;
           if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }}
-        ctx.strokeStyle = `rgba(245, 158, 11, ${{0.06 + (i / 17) * 0.24}})`;
+        ctx.strokeStyle = `rgba(245, 158, 11, ${{0.06 + (i / 17) * 0.25}})`;
         ctx.lineWidth = 1.05; ctx.stroke();
       }}
     }} else {{
-      // Desktop: 2 Intersecting Golden Orbits
       [-0.52, 0.52].forEach((tilt, idx) => {{
         ctx.save(); ctx.translate(cx, cy); ctx.rotate(tilt);
         ctx.beginPath(); ctx.ellipse(0, 0, R * 1.58, R * 0.62, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = isListening ? 'rgba(245,158,11,0.85)' : 'rgba(245,158,11,0.48)';
-        ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.strokeStyle = 'rgba(245,158,11,0.48)'; ctx.lineWidth = 1.2; ctx.stroke();
         const da = t * (idx === 0 ? 1.1 : -0.9);
         ctx.beginPath(); ctx.arc(Math.cos(da)*R*1.58, Math.sin(da)*R*0.62, 2.5, 0, Math.PI*2);
         ctx.fillStyle = '#FDE68A'; ctx.fill();
@@ -796,7 +545,7 @@ def render_sri_zero_failure_ui(
     }}
 
     pts.forEach(p => {{
-      const th = p.th + t * (isListening ? 0.9 : 0.45);
+      const th = p.th + t * 0.45;
       const rad = R * (0.9 + (p.s * 0.06));
       const x3 = rad * Math.sin(p.ph) * Math.cos(th);
       const y3 = rad * Math.cos(p.ph);
@@ -813,16 +562,15 @@ def render_sri_zero_failure_ui(
     if (isMob) {{
       ctx.save(); ctx.translate(cx, cy); ctx.rotate(-0.42);
       ctx.beginPath(); ctx.ellipse(0, 0, R * 1.38, R * 0.52, 0, 0, Math.PI * 2);
-      ctx.strokeStyle = isListening ? 'rgba(253,230,138,0.9)' : 'rgba(253,230,138,0.55)';
-      ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.strokeStyle = 'rgba(253,230,138,0.55)'; ctx.lineWidth = 1.2; ctx.stroke();
       ctx.restore();
     }} else {{
       ctx.beginPath(); ctx.arc(cx, cy, 26, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(14,14,18,0.9)'; ctx.fill();
-      ctx.strokeStyle = isListening ? '#F59E0B' : 'rgba(245,158,11,0.4)'; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = isListening ? '#F59E0B' : '#E5D3B3';
+      ctx.strokeStyle = 'rgba(245,158,11,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = '#E5D3B3';
       ctx.beginPath(); ctx.roundRect(cx - 4.5, cy - 11, 9, 14, 4.5); ctx.fill();
-      ctx.strokeStyle = isListening ? '#F59E0B' : '#E5D3B3'; ctx.lineWidth = 1.8;
+      ctx.strokeStyle = '#E5D3B3'; ctx.lineWidth = 1.8;
       ctx.beginPath(); ctx.arc(cx, cy - 2, 8, 0.1*Math.PI, 0.9*Math.PI); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx, cy + 6); ctx.lineTo(cx, cy + 11); ctx.stroke();
     }}
