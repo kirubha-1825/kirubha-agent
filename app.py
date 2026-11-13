@@ -4389,18 +4389,8 @@ if cmd:
             pass
 
     if cmd == "VOICE_TRIGGER":
-        try:
-            with st.spinner("🎙️ ஸ்ரீ கவனித்துக் கொண்டிருக்கிறது... பேசுங்கள்:"):
-                spoken = sri_universal_router.listen_voice_command()
-                if spoken:
-                    cmd = spoken
-                    st.toast(f"குரல் பெறப்பட்டது: {spoken}", icon="🎙️")
-                else:
-                    st.toast("⚠️ மைக்ரோஃபோன் சிக்னல் கிடைக்கவில்லை (Microphone timeout).", icon="🎙️")
-                    cmd = None
-        except Exception as ve:
-            st.warning(f"Microphone notice: {ve}")
-            cmd = None
+        # Speech is captured client-side via Web Speech API in browser component
+        cmd = None
 
     if cmd and cmd != "VOICE_TRIGGER":
         effective_prompt = str(cmd).strip()
@@ -4412,9 +4402,13 @@ if cmd:
             "doing right now", "which model", "finished", "completed", "நிலை"
         ])
 
+        if "sri_chat_history" not in st.session_state:
+            st.session_state["sri_chat_history"] = []
+
         if is_inquiry:
             st.session_state["active_voice_query"] = effective_prompt
             reply_dict = get_agent_voice_status_reply(effective_prompt)
+            st.session_state["sri_chat_history"].append({"user": effective_prompt, "agent": reply_dict["spoken_text"]})
             st.toast(f"🤖 SRI: {reply_dict['spoken_text']}", icon="🗣️")
             tts_html = generate_speech_synthesis_html(
                 reply_dict["spoken_text"], lang=reply_dict["lang"], autoplay=True
@@ -4429,7 +4423,8 @@ if cmd:
                 task_type=task_kind,
                 folder_name=folder_target,
             )
-            st.toast(f"🚀 Task dispatched autonomously! ID: {new_t_id}", icon="⚡")
+            st.session_state["sri_chat_history"].append({"user": effective_prompt, "agent": f"Task {new_t_id} dispatched."})
+            st.toast(f"🚀 Task dispatched: {new_t_id}", icon="⚡")
 
 # 2. Gather live telemetry and project files for Zero-Failure UI
 db_state = load_db()
@@ -4469,4 +4464,5 @@ render_sri_zero_failure_ui(
     workspace_file=workspace_file_label,
     generated_code=generated_code,
     generated_preview_html=generated_preview_html,
+    chat_history=st.session_state.get("sri_chat_history", []),
 )
