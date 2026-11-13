@@ -782,10 +782,53 @@ def render_sri_zero_failure_ui(
   }}
 
   function sendToPython(command) {{
-    const url = new URL(window.parent.location.href);
-    url.searchParams.set('sri_cmd', command);
-    url.searchParams.set('ts', Date.now());
-    window.parent.history.replaceState({{}}, '', url);
+    if (!command || !command.trim()) return;
+    const cleanCmd = command.trim();
+
+    // 1. Silently update query params in parent URL history without triggering a reload
+    try {{
+      const url = new URL(window.parent.location.href);
+      url.searchParams.set('sri_cmd', cleanCmd);
+      url.searchParams.set('ts', Date.now());
+      window.parent.history.replaceState({{}}, '', url);
+    }} catch(e) {{}}
+
+    // 2. ZERO-RELOAD STREAMLIT BRIDGE: Target the hidden st.text_input in window.parent.document
+    try {{
+      const pDoc = window.parent.document;
+      let bridgeInput = pDoc.querySelector('input[aria-label="sri_bridge_input"]');
+      if (!bridgeInput) {{
+        const allInputs = pDoc.querySelectorAll('input[type="text"]');
+        for (let inp of allInputs) {{
+          if (inp.getAttribute('aria-label') === 'sri_bridge_input' || (inp.id && inp.id.includes('sri_bridge_input'))) {{
+            bridgeInput = inp;
+            break;
+          }}
+        }}
+      }}
+
+      if (bridgeInput) {{
+        // Use React's native value setter so React state updates
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value')?.set
+          || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (nativeSetter) {{
+          nativeSetter.call(bridgeInput, cleanCmd);
+        }} else {{
+          bridgeInput.value = cleanCmd;
+        }}
+
+        bridgeInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        bridgeInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        bridgeInput.dispatchEvent(new KeyboardEvent('keydown', {{ bubbles: true, cancelable: true, key: 'Enter', keyCode: 13, which: 13 }}));
+        bridgeInput.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true, cancelable: true, key: 'Enter', keyCode: 13, which: 13 }}));
+        console.log('⚡ Dispatched command to Streamlit bridge in <1s:', cleanCmd);
+        return;
+      }}
+    }} catch(err) {{
+      console.warn('Bridge input dispatch notice:', err);
+    }}
+
+    // 3. Fallback only if parent access blocked or bridge element not found
     window.parent.location.reload();
   }}
 
@@ -809,6 +852,10 @@ def render_sri_zero_failure_ui(
   }}
 
   function startInlineMic() {{
+    if (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {{
+      console.warn('Speech synthesis active. Skipping inline mic start to prevent echo.');
+      return;
+    }}
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {{
       const hint = document.getElementById('orbHint');
@@ -931,11 +978,20 @@ def render_sri_zero_failure_ui(
   }}
 
   function startClientVoice() {{
+    if (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {{
+      console.warn('Speech synthesis currently active. Refusing to start recognition to prevent echo loop.');
+      return;
+    }}
     startTwoWayVoiceSession();
   }}
   window.startClientVoice = startClientVoice;
 
   function startTwoWayVoiceSession() {{
+    if (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {{
+      console.warn('Speech synthesis currently active. Refusing to start recognition to prevent echo loop.');
+      return;
+    }}
+
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {{
       const hint = document.getElementById('orbHint');
@@ -947,6 +1003,7 @@ def render_sri_zero_failure_ui(
     try {{
       if (orbRecognition) {{
         try {{ orbRecognition.abort(); }} catch(e) {{}}
+        orbRecognition = null;
       }}
       orbRecognition = new SpeechRec();
       orbRecognition.continuous = false;
@@ -955,11 +1012,22 @@ def render_sri_zero_failure_ui(
       orbRecognition.lang = 'en-IN'; // en-IN primary for accurate greetings/technical terms + Tamil support
 
       orbRecognition.onstart = () => {{
+        if (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {{
+          try {{ orbRecognition.abort(); }} catch(e) {{}}
+          isOrbListening = false;
+          setOrbMode('IDLE');
+          return;
+        }}
         isOrbListening = true;
         setOrbMode('LISTENING');
       }};
 
       orbRecognition.onresult = (event) => {{
+        if (window.speechSynthesis && window.speechSynthesis.speaking) {{
+          console.warn('Ignoring speech recognition result while speaking.');
+          return;
+        }}
+
         let interim = '';
         let finalTranscript = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {{
@@ -1013,6 +1081,7 @@ def render_sri_zero_failure_ui(
     isOrbListening = false;
     if (orbRecognition) {{
       try {{ orbRecognition.stop(); }} catch(e) {{}}
+      orbRecognition = null;
     }}
     setOrbMode('IDLE');
   }}
@@ -1024,7 +1093,7 @@ def render_sri_zero_failure_ui(
     }}
 
     const clean = spokenText.trim();
-    // Instant visual pulse into thinking mode (No robotic canned replies)
+    // Instant visual pulse into thinking mode
     setOrbMode('PROCESSING');
     sessionStorage.setItem('sri_pending_voice_reply', '1');
     sessionStorage.setItem('sri_continuous_voice', '1');
@@ -1032,40 +1101,93 @@ def render_sri_zero_failure_ui(
   }}
 
   function speakVoiceReply(text, onComplete) {{
+    if (!text || !text.trim()) {{
+      if (onComplete) onComplete();
+      return;
+    }}
+
+    // 1. CRITICAL: Explicitly abort ALL active speech recognition instances before speech starts to prevent echo self-listening
+    isOrbListening = false;
+    inlineMicListening = false;
+    if (orbRecognition) {{
+      try {{ orbRecognition.abort(); }} catch(e) {{}}
+      orbRecognition = null;
+    }}
+    if (inlineRecognition) {{
+      try {{ inlineRecognition.abort(); }} catch(e) {{}}
+      inlineRecognition = null;
+    }}
+
     if (!window.speechSynthesis) {{
       if (onComplete) onComplete();
       return;
     }}
+
     try {{
       window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
+      const utterance = new SpeechSynthesisUtterance(text.trim());
       const isTamil = /[\u0B80-\u0BFF]/.test(text);
-      utterance.lang = isTamil ? 'ta-IN' : 'en-IN';
-      utterance.rate = 1.0;
-      utterance.pitch = 1.05;
 
-      const voices = window.speechSynthesis.getVoices();
-      const matched = voices.find(v => v.lang && (v.lang.toLowerCase().includes('in') || (isTamil ? v.lang.includes('ta') : v.lang.includes('en'))));
-      if (matched) utterance.voice = matched;
+      // Warm, natural voice tuning: rate=1.02, pitch=1.0
+      utterance.rate = 1.02;
+      utterance.pitch = 1.0;
+
+      // Select warm Indian English / Neural voice
+      const voices = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+      let selectedVoice = null;
+      if (isTamil) {{
+        selectedVoice = voices.find(v => v.lang && (v.lang === 'ta-IN' || v.lang.startsWith('ta')))
+          || voices.find(v => v.name && v.name.toLowerCase().includes('tamil'));
+      }}
+      if (!selectedVoice) {{
+        selectedVoice = voices.find(v => (v.lang === 'en-IN' || v.lang === 'en_IN') && (v.name.includes('Natural') || v.name.includes('Neural') || v.name.includes('Google') || v.name.includes('Online')))
+          || voices.find(v => v.lang === 'en-IN' || v.lang === 'en_IN')
+          || voices.find(v => v.name && (v.name.toLowerCase().includes('india') || v.name.toLowerCase().includes('heera') || v.name.toLowerCase().includes('neerja') || v.name.toLowerCase().includes('ravi') || v.name.toLowerCase().includes('prabhat')))
+          || voices.find(v => v.lang && v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Neural')))
+          || voices.find(v => v.lang && v.lang.startsWith('en'));
+      }}
+
+      if (selectedVoice) {{
+        utterance.voice = selectedVoice;
+        utterance.lang = selectedVoice.lang || (isTamil ? 'ta-IN' : 'en-IN');
+      }} else {{
+        utterance.lang = isTamil ? 'ta-IN' : 'en-IN';
+      }}
 
       setOrbMode('SPEAKING');
 
-      utterance.onend = () => {{
+      let completed = false;
+      const finishTTS = () => {{
+        if (completed) return;
+        completed = true;
         setOrbMode('IDLE');
-        if (onComplete) onComplete();
+        // Restart only after a 450ms buffer delay so SRI never catches its own voice echo
+        setTimeout(() => {{
+          if (onComplete) onComplete();
+        }}, 450);
       }};
+
+      utterance.onend = finishTTS;
       utterance.onerror = (e) => {{
         console.warn('Speech synthesis notice:', e);
-        setOrbMode('IDLE');
-        if (onComplete) onComplete();
+        finishTTS();
       }};
 
       window.speechSynthesis.speak(utterance);
     }} catch(err) {{
       console.warn('TTS error:', err);
       setOrbMode('IDLE');
-      if (onComplete) onComplete();
+      setTimeout(() => {{
+        if (onComplete) onComplete();
+      }}, 450);
     }}
+  }}
+
+  // Hook voiceschanged so voices are immediately cached
+  if (window.speechSynthesis) {{
+    window.speechSynthesis.onvoiceschanged = () => {{
+      window.speechSynthesis.getVoices();
+    }};
   }}
 
   function setOrbMode(mode) {{
@@ -1097,14 +1219,14 @@ def render_sri_zero_failure_ui(
           setTimeout(() => {{
             speakVoiceReply(last.agent, () => {{
               if (continuousVoiceLoop) {{
-                setTimeout(() => {{
-                  if (continuousVoiceLoop) {{
-                    startTwoWayVoiceSession();
-                  }}
-                }}, 750);
+                startClientVoice();
               }}
             }});
           }}, 100);
+        }}
+      }}
+    }}
+  }} catch(e) {{}}
         }}
       }}
     }}

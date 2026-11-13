@@ -4689,43 +4689,43 @@ def is_realtime_web_search_required(query: str) -> bool:
     return False
 
 
-def call_fast_voice_llm(prompt: str, system_instruction: str = "", max_tokens: int = 300) -> str:
+def call_fast_voice_llm(prompt: str, system_instruction: str = "", max_tokens: int = 60) -> str:
     """
     Sub-Second Ultra-Fast Voice LLM Router (< 800ms target latency):
-    Tier 1: Groq (llama-3.3-70b-versatile / llama-3.1-70b-versatile / llama3-70b-8192 / llama3-8b-8192) - 300+ tok/sec (~200-400ms).
-    Tier 2: Direct Google Gemini Flash (gemini-2.5-flash / gemini-2.0-flash) with short 3.5s timeout (~400-700ms).
-    Tier 3: OpenRouter Fast Free Models (llama-3.3-70b-instruct / gemini-2.0-flash) with 4.5s timeout.
-    Tier 4: Guaranteed recovery via call_llm_with_recovery.
+    Tier 1: Groq (llama-3.3-70b-versatile / llama-3.1-70b-versatile) - 300+ tok/sec (~200-400ms).
+    Tier 2: Direct Google Gemini Flash with strict 2.5s thread pool execution timeout.
+    Tier 3: OpenRouter Fast Free Tier with fast failover.
     """
     # Tier 1: Groq Ultra-Fast API (< 400ms)
     if groq_key and OpenAI:
-        groq_models = [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-70b-versatile",
-            "llama3-70b-8192",
-            "llama3-8b-8192"
-        ]
-        for gm in groq_models:
-            try:
-                client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-                msgs = []
-                if system_instruction:
-                    msgs.append({"role": "system", "content": system_instruction})
-                msgs.append({"role": "user", "content": prompt})
-                res = client.chat.completions.create(
-                    model=gm,
-                    messages=msgs,
-                    temperature=0.4,
-                    max_tokens=max_tokens,
-                    timeout=3.5,
-                )
-                text = res.choices[0].message.content
-                if text and text.strip():
-                    return text.strip()
-            except Exception as e:
-                print(f"ℹ️ Fast Voice Groq ({gm}) notice: {e}")
+        groq_models = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile"]
+        try:
+            client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key, max_retries=0)
+            for gm in groq_models:
+                try:
+                    msgs = []
+                    if system_instruction:
+                        msgs.append({"role": "system", "content": system_instruction})
+                    msgs.append({"role": "user", "content": prompt})
+                    res = client.chat.completions.create(
+                        model=gm,
+                        messages=msgs,
+                        temperature=0.4,
+                        max_tokens=max_tokens,
+                        timeout=2.0,
+                    )
+                    text = res.choices[0].message.content
+                    if text and text.strip():
+                        return text.strip()
+                except Exception as e:
+                    err_s = str(e).lower()
+                    print(f"ℹ️ Fast Voice Groq ({gm}) notice: {e}")
+                    if any(x in err_s for x in ["connection", "network", "winerror", "socket", "unreachable", "name resolution"]):
+                        break
+        except Exception as e:
+            print(f"ℹ️ Fast Voice Groq client notice: {e}")
 
-    # Tier 2: Direct Gemini Flash (low latency ~500ms)
+    # Tier 2: Direct Gemini Flash with strict ThreadPoolExecutor timeout (~400ms)
     if gemini_key and genai and time.time() >= _gemini_cooldown_until:
         for g_model_name in ["gemini-2.5-flash", "gemini-2.0-flash"]:
             try:
@@ -4737,23 +4737,28 @@ def call_fast_voice_llm(prompt: str, system_instruction: str = "", max_tokens: i
                     },
                     system_instruction=system_instruction if system_instruction else None,
                 )
-                resp = gen_model.generate_content(prompt, request_options={"timeout": 3.5})
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    fut = executor.submit(gen_model.generate_content, prompt)
+                    resp = fut.result(timeout=2.0)
                 if resp and resp.text and resp.text.strip():
                     return resp.text.strip()
             except Exception as e:
+                err_s = str(e).lower()
                 print(f"ℹ️ Fast Voice Gemini ({g_model_name}) notice: {e}")
+                if any(x in err_s for x in ["connection", "network", "winerror", "socket", "unreachable", "deadline", "timeout"]):
+                    break
 
     # Tier 3: OpenRouter Fast Free Tier
     if openrouter_key and OpenAI:
         or_models = [
             "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemini-2.0-flash-exp:free",
-            "deepseek/deepseek-r1:free"
+            "google/gemini-2.0-flash-exp:free"
         ]
         try:
             client_or = OpenAI(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=openrouter_key,
+                max_retries=0,
                 default_headers={
                     "HTTP-Referer": "https://reakiruba.app",
                     "X-Title": "SRI Fast Voice Agent",
@@ -4770,25 +4775,21 @@ def call_fast_voice_llm(prompt: str, system_instruction: str = "", max_tokens: i
                         messages=msgs,
                         temperature=0.4,
                         max_tokens=max_tokens,
-                        timeout=4.5,
+                        timeout=2.0,
                     )
                     text = res.choices[0].message.content
                     if text and text.strip():
                         return text.strip()
                 except Exception as e:
+                    err_s = str(e).lower()
                     print(f"ℹ️ Fast Voice OpenRouter ({om}) notice: {e}")
+                    if any(x in err_s for x in ["connection", "network", "winerror", "socket", "unreachable"]):
+                        break
         except Exception as e:
             print(f"ℹ️ Fast Voice OpenRouter client notice: {e}")
 
-    # Tier 4: Guaranteed recovery via existing call_llm_with_recovery
-    try:
-        reply_tuple = call_llm_with_recovery(prompt, system_instruction=system_instruction)
-        if isinstance(reply_tuple, tuple):
-            return reply_tuple[0]
-        return str(reply_tuple)
-    except Exception as e:
-        print(f"⚠️ Fast Voice Recovery fallback notice: {e}")
-        raise
+    # Tier 4: Fast Fail to Instant Natural Fallback (< 1.5s total failover)
+    raise RuntimeError("Fast voice models unavailable.")
 
 
 def get_executive_voice_response(
@@ -4801,111 +4802,110 @@ def get_executive_voice_response(
     research_summary: str | None = None,
 ) -> str:
     """
-    Sub-Second Multi-Dimensional Voice Agent & Autonomous Co-Founder Persona:
-    - Universal Knowledge across all topics: coding, architecture, startups, daily life, general knowledge.
-    - Multi-dimensional thinking on every reply:
-      (a) Sharp, direct answer to Kirubha's exact question in natural Tamil + English.
-      (b) Strategic insight, optimization angle, architecture trade-off, or edge case.
-      (c) Proactive next engineering step + mandatory ending:
-          'அடுத்து இதைச் செய்யலாமா, அல்லது உங்களிடம் வேறு ஏதேனும் ஐடியா இருக்கிறதா?'
-    - Sub-second ultra-fast routing (< 800ms) with concise spoken output (max_tokens=300).
+    Natural Human Phone-Call Persona for Kirubha:
+    - Spoken voice replies are very short and natural (1 to 2 short sentences max, under 25 words).
+    - Sounds like a smart friend & co-founder chatting casually on a phone call.
+    - Answers ONLY what Kirubha actually asked (no unrequested file stats, byte sizes, or CSRF tokens).
+    - Never appends hardcoded robotic Tamil footer strings.
     """
-    ws_state = inspect_workspace_state()
-    files_str = ", ".join(ws_state["files"][:4])
-    task_info = f"{active_tasks_count} active background task(s)" if active_tasks_count > 0 else "zero tasks currently running"
+    clean_q = user_query.strip()
+    q_low = clean_q.lower()
+
+    # 1. Instant natural answers for common casual greetings / check-ins (< 1ms)
+    if any(w == q_low or q_low.startswith(w + " ") for w in ["hello", "hi", "hey", "வணக்கம்", "வணக்கம்டா", "vanakkam"]):
+        return "Hey Kirubha! சொல்லுங்க, இப்ப நம்ம என்ன பண்ணலாம்?"
+
     if newly_dispatched_id:
-        task_info += f", and task {newly_dispatched_id} was just dispatched"
+        return f"Done Kirubha! I've started task {newly_dispatched_id} in the background. What's next?"
+
+    if research_summary:
+        return f"Hey Kirubha, I found live updates for '{clean_q}' and put them on your Preview screen. Take a look!"
 
     system_instr = (
-        "You are SRI AI, Kirubha's elite technical co-founder and autonomous engineering partner. "
-        "You possess universal knowledge across all topics: software engineering, system architecture, "
-        "startups, algorithms, general science, technology trends, product strategy, and daily life. "
-        "Tone: Razor-sharp, highly intelligent, warm, collaborative, and energetic. "
-        "Language: Natural English seamlessly blended with familiar conversational Tamil / Tanglish phrases. "
-        "\nCRITICAL MULTI-DIMENSIONAL RESPONSE STRUCTURE (Strictly 3 Parts):\n"
-        "1. DIRECT SHARP ANSWER: Deliver a crisp, authoritative direct answer to Kirubha's exact question or greeting.\n"
-        "2. MULTI-DIMENSIONAL INSIGHT: Provide a high-level strategic angle, performance optimization, architectural trade-off, or edge-case perspective.\n"
-        "3. PROACTIVE NEXT STEP: Propose 1 to 2 concrete, logical next engineering or action steps based on our workspace context.\n"
-        "\nMANDATORY CLOSING RULE:\n"
-        "You MUST conclude your spoken response with this EXACT sentence in Tamil:\n"
-        "'அடுத்து இதைச் செய்யலாமா, அல்லது உங்களிடம் வேறு ஏதேனும் ஐடியா இருக்கிறதா?'\n"
-        "\nAUDIO POLISH:\n"
-        "- Keep the entire response under 4-5 sentences (~60-90 words) so it synthesizes smoothly with low latency.\n"
-        "- Avoid markdown symbols (no asterisks, backticks, or headers)."
+        "You are SRI, Kirubha's close friend and startup co-founder having a quick voice phone call. "
+        "CRITICAL RULES:\n"
+        "1. Keep your reply VERY SHORT: strictly 1 to 2 short sentences, under 25 words total.\n"
+        "2. Sound like a real, smart friend on a phone call — warm, natural, and direct.\n"
+        "3. Answer ONLY what Kirubha asked. NEVER dump file stats, byte sizes, task counts, or unrequested technical status.\n"
+        "4. Mix natural conversational English and familiar Tamil / Tanglish phrases smoothly (e.g. 'Hey Kirubha!', 'கண்டிப்பா பண்ணிடலாம்!', 'சொல்லுங்க').\n"
+        "5. NEVER append any repetitive robotic footer or closing script.\n"
+        "6. Plain spoken text only. Zero markdown, asterisks, or bullet points."
     )
 
-    research_clause = f"\n- Live Web Research Highlights: {research_summary}" if research_summary else ""
-    user_prompt = (
-        f"Kirubha's voice input: \"{user_query}\"\n"
-        f"Current Engineering Context:\n"
-        f"- Active Background Tasks: {task_info}\n"
-        f"- Workspace Files Completed: {files_str}\n"
-        f"- Current Workspace Target: {workspace_file} ({file_size} bytes)"
-        f"{research_clause}\n\n"
-        f"Think multi-dimensionally: 1) Direct answer, 2) Strategic insight / optimization, 3) Proactive next step. "
-        f"Always conclude with 'அடுத்து இதைச் செய்யலாமா, அல்லது உங்களிடம் வேறு ஏதேனும் ஐடியா இருக்கிறதா?'"
-    )
+    user_prompt = f"Kirubha says: \"{clean_q}\". Reply casually and directly in 1-2 short sentences (under 25 words)."
 
-    mandatory_suffix = "அடுத்து இதைச் செய்யலாமா, அல்லது உங்களிடம் வேறு ஏதேனும் ஐடியா இருக்கிறதா?"
     try:
-        reply = call_fast_voice_llm(user_prompt, system_instruction=system_instr, max_tokens=300)
-        if reply and len(reply.strip()) > 15:
-            clean_reply = reply.replace("**", "").replace("##", "").replace("*", "").replace("`", "").strip()
-            if "அடுத்து இதைச் செய்யலாமா" not in clean_reply:
-                clean_reply += f" {mandatory_suffix}"
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = executor.submit(call_fast_voice_llm, user_prompt, system_instr, 60)
+            reply = fut.result(timeout=2.0)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        if reply and len(reply.strip()) > 3:
+            clean_reply = re.sub(r'[*#`_]', '', reply).strip()
+            # If reply exceeds 2 sentences, keep first 2
+            sentences = re.split(r'(?<=[.!?])\s+', clean_reply)
+            if len(sentences) > 2:
+                clean_reply = " ".join(sentences[:2])
+            words = clean_reply.split()
+            if len(words) > 28:
+                clean_reply = " ".join(words[:25]) + "."
             return clean_reply
     except Exception as e:
-        print(f"⚠️ Co-founder fast voice LLM call notice: {e}")
+        print(f"⚠️ Fast voice phone-call LLM notice: {e}")
 
-    # Rich multi-dimensional fallback ensuring zero-failure
-    q_low = user_query.lower()
-    if research_summary:
-        return (
-            f"வணக்கம் Kirubha! I searched the web in real time for '{user_query}'. {research_summary} "
-            f"Strategically, integrating these live opportunities gives our project immediate industry relevance. "
-            f"I have loaded the full interactive card in your Preview pane. "
-            f"Proactively, we can link these resources or continue refining our app. "
-            f"{mandatory_suffix}"
-        )
-    elif any(w in q_low for w in ["hello", "start", "hi", "hey", "வணக்கம்"]):
-        return (
-            f"வணக்கம் Kirubha! As your engineering partner, our workspace has {files_str} ready, and {task_info}. "
-            f"From an architectural perspective, establishing modular API boundaries now will prevent technical debt as we scale. "
-            f"Proactively, I recommend three next steps: 1) Wire authentication endpoints to login.html, 2) Build the student analytics dashboard UI, or 3) Set up end-to-end component testing. "
-            f"{mandatory_suffix}"
-        )
-    elif newly_dispatched_id:
-        return (
-            f"வணக்கம் Kirubha! I have dispatched task {newly_dispatched_id} into our background runner. "
-            f"To optimize throughput while the background agent synthesizes, we should work in parallel on the data layer. "
-            f"Proactively, I suggest we: 1) Prepare the database schema, 2) Design the routing between login and dashboard, or 3) Review API security tokens. "
-            f"{mandatory_suffix}"
-        )
-    else:
-        return (
-            f"Hello Kirubha! Regarding '{user_query}', our workspace has {files_str} completed with {task_info}. "
-            f"Considering scalability and performance, keeping our components decoupled will ensure sub-second response times. "
-            f"As your co-founder, my recommended next steps are: 1) Enhance responsive styling, 2) Connect live backend API routes, or 3) Run automated validation checks. "
-            f"{mandatory_suffix}"
-        )
+    # Fallback short conversational reply
+    return f"Got it Kirubha! On '{clean_q}', I'm on it. சொல்லுங்க, what's our next step?"
 
 
-# 2. Read query params command and route through Proactive Multi-Dimensional Voice Agent
-cmd = st.query_params.get("sri_cmd")
+# ==============================================================================
+# ZERO-RELOAD INSTANT VOICE BRIDGE
+# ==============================================================================
+# Hidden st.text_input inside parent document that iframe JS updates directly via React native setter
+st.markdown("""
+<style>
+div[data-testid="stTextInput"]:has(input[aria-label="sri_bridge_input"]),
+div[data-testid="stTextInput"]:has(input[id*="sri_bridge_input"]),
+div:has(> input[aria-label="sri_bridge_input"]) {
+    position: fixed !important;
+    top: -9999px !important;
+    left: -9999px !important;
+    width: 1px !important;
+    height: 1px !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    z-index: -9999 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+def _on_sri_bridge_change():
+    val = st.session_state.get("sri_bridge_input", "").strip()
+    if val:
+        st.session_state["_active_sri_bridge_cmd"] = val
+    st.session_state["sri_bridge_input"] = ""
+
+st.text_input(
+    "sri_bridge_input",
+    key="sri_bridge_input",
+    label_visibility="collapsed",
+    on_change=_on_sri_bridge_change,
+)
+
+# 2. Read bridge command or query params and route through Fast Conversational Voice Agent
+bridge_cmd = st.session_state.pop("_active_sri_bridge_cmd", None)
+cmd = bridge_cmd or st.query_params.get("sri_cmd")
 if cmd:
-    # Clear query param immediately so it runs only once
+    # Clear query param immediately if it came from URL
     try:
-        del st.query_params["sri_cmd"]
+        if "sri_cmd" in st.query_params:
+            del st.query_params["sri_cmd"]
         if "ts" in st.query_params:
             del st.query_params["ts"]
     except Exception:
-        try:
-            st.query_params.clear()
-        except Exception:
-            pass
+        pass
 
     if cmd == "VOICE_TRIGGER":
-        # Speech is captured client-side via Web Speech API in browser component
         cmd = None
 
     if cmd and cmd != "VOICE_TRIGGER":
@@ -4917,7 +4917,6 @@ if cmd:
             st.session_state["sri_chat_history"] = []
 
         # Smart Conditional Web Search (Only real-time external info: hackathons, live events, today's news)
-        # All other universal questions (coding, concepts, architecture, general knowledge) route directly to fast LLM (<800ms)
         is_research_query = is_realtime_web_search_required(effective_prompt)
 
         research_summary = None
@@ -4947,8 +4946,7 @@ if cmd:
             )
             st.toast(f"🚀 Task dispatched: {new_t_id}", icon="⚡")
 
-        # Proactive Autonomous Co-Founder Voice Agent: Never give robotic canned replies.
-        # Route ALL voice inputs through main LLM with proactive persona
+        # Natural Conversational Co-Founder Voice Agent (Short, Human, Phone-Call style)
         reply_spoken = get_executive_voice_response(
             effective_prompt,
             active_tasks_count=running_count,
@@ -4956,15 +4954,13 @@ if cmd:
             file_exists=os.path.exists(target_full),
             file_size=len(generated_code),
             newly_dispatched_id=new_t_id,
-            research_summary=research_summary
+            research_summary=research_summary,
         )
 
         st.session_state["sri_chat_history"].append({"user": effective_prompt, "agent": reply_spoken})
-        st.toast(f"🤖 SRI: {reply_spoken[:100]}...", icon="🗣️")
-        tts_html = generate_speech_synthesis_html(
-            reply_spoken, lang="en-IN" if not any(ord(c) > 127 for c in reply_spoken[:20]) else "ta-IN", autoplay=True
-        )
-        components.html(tts_html, height=0)
+        st.toast(f"🤖 SRI: {reply_spoken}", icon="🗣️")
+        # Notice: Audio synthesis is handled exclusively by sri_zero_failure_ui's 3D orb component
+        # so there is never duplicate or conflicting audio playback!
 
 # 3. Call render_sri_zero_failure_ui to render the full-viewport UI
 render_sri_zero_failure_ui(
