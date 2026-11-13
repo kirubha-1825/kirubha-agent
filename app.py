@@ -327,44 +327,52 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Custom Styling
+# SRI AI Bespoke Obsidian & Tiger-Gold Bridge
+from sri_ui_bridge import inject_sri_ui_and_particles, render_3d_golden_orb
+
+# Custom Styling: Deep Obsidian & Amber Gold
 st.markdown(
     """
 <style>
-    .main-title {
-        font-size: 2.2rem;
-        font-weight: 800;
-        background: linear-gradient(90deg, #3B82F6, #8B5CF6, #EC4899);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.2rem;
+    /* 1. Remove all default Streamlit UI chrome & hide default radio circles */
+    [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"], .stDeployButton, #MainMenu, footer {
+        display: none !important;
     }
-    .sub-title {
-        color: #64748B;
-        font-size: 1rem;
-        margin-bottom: 1.2rem;
+    input[type="radio"] {
+        display: none !important;
     }
+    div[role="radiogroup"] > label > div:first-child {
+        display: none !important;
+    }
+
+    /* 2. Force entire viewport to pure Deep Obsidian Black (#060709) with zero bluish/gray tint */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .stApp, section.main, .main {
+        background-color: #060709 !important;
+        background: #060709 !important;
+        color: #F1F5F9 !important;
+    }
+
     .status-card {
-        background: #1E293B;
-        border: 1px solid #334155;
-        border-radius: 10px;
+        background: #0E1117;
+        border: 1px solid #1E222B;
+        border-radius: 12px;
         padding: 1rem;
         margin-bottom: 0.8rem;
     }
     .terminal-box {
-        background: #0F172A;
-        color: #10B981;
-        font-family: 'Courier New', Courier, monospace;
-        font-size: 0.85rem;
+        background: #090B10;
+        color: #34D399;
+        font-family: 'JetBrains Mono', Courier, monospace;
+        font-size: 0.82rem;
         padding: 0.75rem;
-        border-radius: 6px;
-        max-height: 250px;
+        border-radius: 8px;
+        max-height: 220px;
         overflow-y: auto;
-        border: 1px solid #1E293B;
+        border: 1px solid #1E222B;
         white-space: pre-wrap;
     }
     .stProgress > div > div > div > div {
-        background-image: linear-gradient(to right, #3B82F6, #8B5CF6);
+        background-image: linear-gradient(to right, #F59E0B, #FBBF24) !important;
     }
 </style>
 """,
@@ -3036,6 +3044,8 @@ handle_sri_api_gateway()
 
 
 
+
+
 # ==============================================================================
 # 8. BESPOKE OBSIDIAN THEME, PARTICLES & STICKY HEADER
 # ==============================================================================
@@ -3061,32 +3071,33 @@ def create_project_zip_bundle(target_path: str) -> bytes:
 def render_obsidian_theme_and_particles():
     """Renders Deep Obsidian theme CSS and hardware-accelerated ambient ember particles."""
     theme_html = """
-    <canvas id="obsidian-ambient-canvas"></canvas>
+    <canvas id="obsidian-ambient-canvas" style="position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 0;"></canvas>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
 
-        /* Deep Obsidian Canvas (#060709) */
-        html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .stApp {
+        /* True Deep Obsidian Canvas (#060709) across all Streamlit background wrappers */
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .stApp, section.main, .main {
             background-color: #060709 !important;
+            background: #060709 !important;
             color: #F1F5F9 !important;
             font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
         }
 
-        #obsidian-ambient-canvas {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            pointer-events: none;
-            z-index: 0;
-            opacity: 0.85;
+        /* 1. Remove all default Streamlit UI chrome & hide all default radio circles */
+        [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"], .stDeployButton, #MainMenu, footer {
+            display: none !important;
+        }
+        input[type="radio"] {
+            display: none !important;
+        }
+        div[role="radiogroup"] > label > div:first-child {
+            display: none !important;
         }
 
         /* Container padding for edge-to-edge bespoke feel */
         .main .block-container {
             max-width: 100% !important;
-            padding-top: 0.6rem !important;
+            padding-top: 0.5rem !important;
             padding-bottom: 2rem !important;
             padding-left: 1.2rem !important;
             padding-right: 1.2rem !important;
@@ -3094,14 +3105,9 @@ def render_obsidian_theme_and_particles():
             z-index: 1;
         }
 
-        /* Streamlit Header & Sidebar styling */
-        header[data-testid="stHeader"] {
-            background: transparent !important;
-            backdrop-filter: blur(8px) !important;
-        }
-
-        [data-testid="stSidebar"] {
+        [data-testid="stSidebar"], section[data-testid="stSidebar"] {
             background-color: #090B10 !important;
+            background: #090B10 !important;
             border-right: 1px solid #1E222B !important;
             box-shadow: 4px 0 30px rgba(0, 0, 0, 0.8) !important;
         }
@@ -3121,7 +3127,179 @@ def render_obsidian_theme_and_particles():
             box-shadow: 0 4px 20px rgba(245, 158, 11, 0.12);
         }
 
-        /* Primary and secondary buttons */
+        /* Hide all default Streamlit red/white radio circles & style as sleek segmented pills */
+        div[role="radiogroup"] {
+            display: flex !important;
+            flex-direction: row !important;
+            gap: 6px !important;
+            background: #090B10 !important;
+            border: 1px solid #1E222B !important;
+            padding: 3px !important;
+            border-radius: 9999px !important;
+            width: fit-content !important;
+        }
+
+        div[role="radiogroup"] > label {
+            margin: 0 !important;
+            padding: 5px 16px !important;
+            border-radius: 9999px !important;
+            cursor: pointer !important;
+            border: 1px solid transparent !important;
+            transition: all 0.2s ease !important;
+            background: transparent !important;
+        }
+
+        div[role="radiogroup"] > label > div:first-child {
+            display: none !important;
+        }
+
+        div[role="radiogroup"] > label div[data-testid="stMarkdownContainer"] p {
+            color: #94A3B8 !important;
+            font-size: 0.8rem !important;
+            font-weight: 600 !important;
+            margin: 0 !important;
+            transition: color 0.2s ease !important;
+        }
+
+        div[role="radiogroup"] > label:hover {
+            background: rgba(245, 158, 11, 0.06) !important;
+        }
+
+        div[role="radiogroup"] > label:has(input:checked) {
+            background: rgba(245, 158, 11, 0.14) !important;
+            border: 1px solid #F59E0B !important;
+            box-shadow: 0 0 10px rgba(245, 158, 11, 0.25) !important;
+        }
+
+        div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownContainer"] p {
+            color: #FBBF24 !important;
+            font-weight: 700 !important;
+        }
+
+        /* Carousel horizontal pill dock */
+        div[data-testid="stHorizontalBlock"]:has(button[key="pill_student_db"]) {
+            display: flex !important;
+            flex-direction: row !important;
+            gap: 6px !important;
+            align-items: center !important;
+            margin-bottom: 6px !important;
+        }
+
+        div[data-testid="stHorizontalBlock"]:has(button[key="pill_student_db"]) button {
+            background: #0E1117 !important;
+            border: 1px solid #1E222B !important;
+            border-radius: 9999px !important;
+            color: #D1D5DB !important;
+            font-size: 0.74rem !important;
+            font-weight: 500 !important;
+            padding: 6px 10px !important;
+            white-space: nowrap !important;
+            text-overflow: ellipsis !important;
+            overflow: hidden !important;
+            transition: all 0.2s ease !important;
+        }
+
+        div[data-testid="stHorizontalBlock"]:has(button[key="pill_student_db"]) button[key="pill_student_db"] {
+            border: 1px solid #F59E0B !important;
+            background: rgba(245, 158, 11, 0.12) !important;
+            color: #FBBF24 !important;
+            box-shadow: 0 0 10px rgba(245, 158, 11, 0.25) !important;
+            font-weight: 600 !important;
+        }
+
+        div[data-testid="stHorizontalBlock"]:has(button[key="pill_student_db"]) button:hover {
+            border-color: #F59E0B !important;
+            color: #FBBF24 !important;
+            background: rgba(245, 158, 11, 0.08) !important;
+            transform: translateY(-1px) !important;
+        }
+
+        /* Gold-Bordered Prompt Bar: "Ask SRI Agent..." and "Message SRI..." */
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]),
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) {
+            background: #0E1117 !important;
+            border: 1px solid rgba(245, 158, 11, 0.4) !important;
+            border-radius: 9999px !important;
+            padding: 4px 8px 4px 18px !important;
+            align-items: center !important;
+            box-shadow: 0 4px 25px rgba(0, 0, 0, 0.6), 0 0 15px rgba(245, 158, 11, 0.15) !important;
+            transition: border-color 0.25s, box-shadow 0.25s !important;
+            margin-top: 10px !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+        }
+
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]):focus-within,
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]):focus-within {
+            border-color: #F59E0B !important;
+            box-shadow: 0 4px 28px rgba(245, 158, 11, 0.35) !important;
+        }
+
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]) div[data-testid="column"],
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) div[data-testid="column"] {
+            width: auto !important;
+            min-width: 0 !important;
+            flex: 0 0 auto !important;
+        }
+
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]) div[data-testid="column"]:first-child,
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) div[data-testid="column"]:first-child {
+            flex: 1 1 auto !important;
+        }
+
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]) div[data-testid="stTextInput"],
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) div[data-testid="stTextInput"] {
+            margin-bottom: 0 !important;
+        }
+
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]) input,
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) input {
+            background: transparent !important;
+            border: none !important;
+            color: #FFFFFF !important;
+            box-shadow: none !important;
+            padding-left: 0 !important;
+            font-size: 0.88rem !important;
+        }
+
+        /* Circular Mic & Gold Send Buttons inside dock */
+        button[key="unified_mic_btn"] {
+            background: transparent !important;
+            border: none !important;
+            color: #94A3B8 !important;
+            font-size: 1.15rem !important;
+            border-radius: 50% !important;
+            padding: 4px !important;
+            transition: color 0.2s, background 0.2s !important;
+        }
+
+        button[key="unified_mic_btn"]:hover {
+            color: #F59E0B !important;
+            background: rgba(245, 158, 11, 0.12) !important;
+        }
+
+        button[key="unified_send_btn"] {
+            background: linear-gradient(135deg, #F59E0B, #D97706) !important;
+            color: #060709 !important;
+            font-weight: 900 !important;
+            font-size: 1.05rem !important;
+            border: none !important;
+            border-radius: 50% !important;
+            width: 36px !important;
+            height: 36px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0 2px 10px rgba(245, 158, 11, 0.45) !important;
+            transition: transform 0.2s, box-shadow 0.2s !important;
+        }
+
+        button[key="unified_send_btn"]:hover {
+            transform: scale(1.08) !important;
+            box-shadow: 0 4px 18px rgba(245, 158, 11, 0.65) !important;
+        }
+
+        /* Buttons styling */
         button[kind="primary"] {
             background: linear-gradient(135deg, #F59E0B, #D97706) !important;
             color: #060709 !important;
@@ -3132,26 +3310,22 @@ def render_obsidian_theme_and_particles():
             transition: all 0.2s ease !important;
         }
 
-        button[kind="primary"]:hover {
-            box-shadow: 0 6px 26px rgba(245, 158, 11, 0.6) !important;
-            transform: translateY(-1px) !important;
-        }
-
         button[kind="secondary"] {
-            background: rgba(18, 22, 31, 0.85) !important;
-            color: #F1F5F9 !important;
-            border: 1px solid #1E222B !important;
+            background: #0E1117 !important;
+            color: #E2E8F0 !important;
+            border: 1px solid #262A34 !important;
             border-radius: 9999px !important;
+            font-size: 0.78rem !important;
             transition: all 0.2s ease !important;
         }
 
         button[kind="secondary"]:hover {
             border-color: #F59E0B !important;
-            color: #F59E0B !important;
+            color: #FBBF24 !important;
             background: rgba(245, 158, 11, 0.08) !important;
         }
 
-        /* Text inputs and areas */
+        /* Text inputs */
         input[type="text"], input[type="password"], textarea, .stSelectbox > div > div {
             background-color: #0C0F17 !important;
             color: #FFFFFF !important;
@@ -3164,229 +3338,419 @@ def render_obsidian_theme_and_particles():
             box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25) !important;
         }
 
-        /* Locked Sticky Top Header */
+        /* Locked Sticky Top Header (68px, glassmorphic obsidian, 1px #1A1D24 border) */
         .sri-sticky-header {
             position: sticky;
             top: 0;
             z-index: 999;
+            height: 68px;
+            background: rgba(6, 7, 9, 0.94);
             backdrop-filter: blur(18px);
             -webkit-backdrop-filter: blur(18px);
-            background: rgba(6, 7, 9, 0.88);
-            border-bottom: 1px solid #1E222B;
-            padding: 12px 20px;
-            margin-top: -0.6rem;
+            border-bottom: 1px solid #1A1D24;
+            padding: 0 24px;
+            margin-top: -0.5rem;
             margin-left: -1.2rem;
             margin-right: -1.2rem;
             margin-bottom: 1.2rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            box-sizing: border-box;
         }
 
-        .brand-title {
-            font-size: 1.45rem;
-            font-weight: 900;
-            letter-spacing: -0.5px;
+        .brand-title-wrap {
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
-        .brand-title .sri-text {
+        .brand-logo-editorial {
+            font-size: 1.55rem;
+            font-weight: 800;
+            letter-spacing: -0.5px;
             color: #FFFFFF;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            user-select: none;
         }
 
-        .brand-title .ai-text {
-            background: linear-gradient(135deg, #FBBF24, #F59E0B, #D97706);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+        .brand-period-gold {
+            color: #F59E0B;
+            font-weight: 900;
         }
 
-        .brand-tag {
-            font-size: 0.72rem;
-            color: #64748B;
-            font-weight: 500;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            border-left: 1px solid #1E222B;
-            padding-left: 8px;
-            margin-left: 4px;
-        }
-
-        .header-actions {
+        .header-center-dock {
             display: flex;
             align-items: center;
-            gap: 12px;
+            justify-content: center;
         }
 
-        .status-badge-active {
+        .center-agent-pill {
             display: flex;
             align-items: center;
-            gap: 6px;
-            background: rgba(16, 185, 129, 0.12);
-            border: 1px solid rgba(16, 185, 129, 0.35);
-            color: #34D399;
-            padding: 4px 12px;
+            gap: 8px;
+            background: #0E1117;
+            border: 1px solid rgba(245, 158, 11, 0.25);
             border-radius: 9999px;
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0.3px;
-        }
-
-        .pulse-dot {
-            width: 7px;
-            height: 7px;
-            background: #10B981;
-            border-radius: 50%;
-            box-shadow: 0 0 10px #10B981;
-            animation: pulse-green 2s infinite;
-        }
-
-        @keyframes pulse-green {
-            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-            70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
-        }
-
-        .drawer-pill {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            background: rgba(18, 22, 31, 0.9);
-            border: 1px solid #1E222B;
-            color: #E2E8F0;
-            padding: 4px 12px;
-            border-radius: 9999px;
-            font-size: 0.78rem;
+            padding: 6px 18px;
+            font-size: 0.8rem;
             font-weight: 600;
+            color: #E2E8F0;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+            letter-spacing: 0.2px;
         }
 
-        /* 3D Golden Neural Voice Orb */
-        .voice-orb-wrapper {
+        .gold-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #F59E0B;
+            box-shadow: 0 0 10px #F59E0B, 0 0 4px #FBBF24;
+            display: inline-block;
+        }
+
+        .header-actions-right {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .control-drawer-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+
+        .control-drawer-btn:hover {
+            background: rgba(245, 158, 11, 0.08);
+        }
+
+        .drawer-text-col {
+            display: flex;
+            flex-direction: column;
+            text-align: left;
+            line-height: 1.15;
+        }
+
+        .drawer-label-top {
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #E2E8F0;
+        }
+
+        .drawer-label-sub {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #F59E0B;
+            text-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
+        }
+
+        .user-avatar-badge {
             position: relative;
-            width: 170px;
-            height: 170px;
-            margin: 10px auto 16px auto;
+            width: 34px;
+            height: 34px;
+            background: #12151D;
+            border: 1px solid #232834;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
         }
 
-        .soundwave-ring {
+        .avatar-green-dot {
             position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 7px;
+            height: 7px;
+            background: #10B981;
             border-radius: 50%;
-            border: 1.5px solid rgba(245, 158, 11, 0.4);
-            animation: pulse-wave 3.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
-            pointer-events: none;
-        }
-        .ring-1 { width: 140px; height: 140px; animation-delay: 0s; }
-        .ring-2 { width: 180px; height: 180px; animation-delay: 1.1s; }
-        .ring-3 { width: 220px; height: 220px; animation-delay: 2.2s; }
-
-        @keyframes pulse-wave {
-            0% { transform: scale(0.65); opacity: 0.8; }
-            50% { opacity: 0.35; }
-            100% { transform: scale(1.3); opacity: 0; }
+            box-shadow: 0 0 6px #10B981;
+            border: 1px solid #12151D;
         }
 
-        .golden-neural-orb {
+        /* -------------------------------------------------- */
+        /* Left Zone: Subtitle, Title & Divided Metrics List   */
+        /* -------------------------------------------------- */
+        .left-zone-greeting {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: #D97706;
+            margin-bottom: 2px;
+            letter-spacing: -0.2px;
+        }
+
+        .left-zone-title {
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: #FFFFFF;
+            font-family: 'Playfair Display', Georgia, serif;
+            letter-spacing: -0.5px;
+            margin-bottom: 20px;
+            line-height: 1.1;
+        }
+
+        .metrics-list-card {
+            background: transparent;
+            border-top: 1px solid #1A1D24;
+            border-bottom: 1px solid #1A1D24;
+            padding: 4px 0;
+            margin-bottom: 22px;
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #1A1D24;
+            font-size: 0.85rem;
+        }
+
+        .metric-row:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            color: #94A3B8;
+            font-weight: 500;
+        }
+
+        .metric-val {
+            color: #E2E8F0;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .metric-val-status {
+            color: #F59E0B;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            text-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+        }
+
+        .metric-dot {
+            font-size: 0.7rem;
+            color: #94A3B8;
+        }
+
+        .gold-dot {
+            font-size: 0.7rem;
+            color: #F59E0B;
+            text-shadow: 0 0 8px #F59E0B;
+        }
+
+        .env-runtime-heading {
+            font-size: 0.82rem;
+            font-weight: 500;
+            color: #64748B;
+            margin-bottom: 10px;
+        }
+
+        .runtime-pills-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .runtime-pill {
+            background: #0E1117;
+            border: 1px solid #1E222B;
+            color: #94A3B8;
+            padding: 6px 14px;
+            border-radius: 9999px;
+            font-size: 0.78rem;
+            font-weight: 500;
+        }
+
+        .runtime-pill-gold {
+            color: #F59E0B !important;
+            border: 1px solid rgba(245, 158, 11, 0.45) !important;
+            text-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+            font-weight: 600;
+        }
+
+        /* -------------------------------------------------- */
+        /* Center Zone: 3D Granulated Golden Particle Sphere   */
+        /* -------------------------------------------------- */
+        .orb-stage-wrapper {
             position: relative;
-            width: 110px;
-            height: 110px;
-            border-radius: 50%;
-            background: radial-gradient(circle at 35% 35%, #FDE68A 0%, #F59E0B 35%, #D97706 65%, #78350F 95%, #451A03 100%);
-            box-shadow: 
-                0 0 35px rgba(245, 158, 11, 0.55),
-                0 0 70px rgba(217, 119, 6, 0.35),
-                inset -8px -8px 18px rgba(69, 26, 3, 0.8),
-                inset 8px 8px 18px rgba(254, 243, 199, 0.6);
+            width: 250px;
+            height: 235px;
+            margin: 0 auto 10px auto;
             display: flex;
             align-items: center;
             justify-content: center;
-            animation: orb-float 4s ease-in-out infinite alternate;
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-        }
-
-        .golden-neural-orb:hover {
-            transform: scale(1.05);
-            box-shadow: 
-                0 0 50px rgba(245, 158, 11, 0.8),
-                0 0 95px rgba(251, 191, 36, 0.5),
-                inset -8px -8px 18px rgba(69, 26, 3, 0.8),
-                inset 8px 8px 18px rgba(254, 243, 199, 0.8);
-        }
-
-        @keyframes orb-float {
-            0% { transform: translateY(0px) scale(1); }
-            100% { transform: translateY(-6px) scale(1.02); }
-        }
-
-        .orb-core-glow {
-            position: absolute;
-            width: 45px;
-            height: 45px;
-            border-radius: 50%;
-            background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(253, 230, 138, 0.5) 50%, transparent 80%);
-            filter: blur(4px);
-            animation: core-breathe 2.5s ease-in-out infinite alternate;
-        }
-
-        @keyframes core-breathe {
-            0% { opacity: 0.45; transform: scale(0.9); }
-            100% { opacity: 0.95; transform: scale(1.15); }
-        }
-
-        .orb-icon {
-            position: relative;
-            z-index: 2;
-            font-size: 2rem;
-            filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7));
+            cursor: pointer;
             user-select: none;
         }
 
-        /* Glassmorphic Cards & 1px Hairline Borders */
-        .glass-card {
-            background: rgba(12, 15, 22, 0.82);
+        .orb-halo-ambient {
+            position: absolute;
+            width: 225px;
+            height: 225px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(245, 158, 11, 0.3) 0%, rgba(217, 119, 6, 0.12) 45%, transparent 70%);
+            filter: blur(14px);
+            pointer-events: none;
+            animation: halo-pulse 3.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes halo-pulse {
+            0% { transform: scale(0.92); opacity: 0.7; }
+            100% { transform: scale(1.12); opacity: 1; }
+        }
+
+        .orb-orbit-ring {
+            position: absolute;
+            width: 215px;
+            height: 215px;
+            border-radius: 50%;
+            border: 1px solid rgba(245, 158, 11, 0.45);
+            box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
+            pointer-events: none;
+            transform-style: preserve-3d;
+        }
+
+        .ring-tilt-a {
+            transform: rotateX(72deg) rotateY(25deg);
+            animation: orbit-spin-a 8s linear infinite;
+        }
+
+        .ring-tilt-b {
+            width: 235px;
+            height: 235px;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            transform: rotateX(68deg) rotateY(-36deg);
+            animation: orbit-spin-b 11s linear infinite reverse;
+        }
+
+        @keyframes orbit-spin-a {
+            0% { transform: rotateX(72deg) rotateY(25deg) rotateZ(0deg); }
+            100% { transform: rotateX(72deg) rotateY(25deg) rotateZ(360deg); }
+        }
+
+        @keyframes orbit-spin-b {
+            0% { transform: rotateX(68deg) rotateY(-36deg) rotateZ(0deg); }
+            100% { transform: rotateX(68deg) rotateY(-36deg) rotateZ(360deg); }
+        }
+
+        .orbit-sparkle {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background: #FFFBEB;
+            border-radius: 50%;
+            box-shadow: 0 0 8px 3px #FBBF24;
+            top: 50%;
+            left: -3px;
+        }
+
+        .orb-canvas-sphere {
+            position: relative;
+            z-index: 2;
+            border-radius: 50%;
+        }
+
+        .orb-center-mic-badge {
+            position: absolute;
+            z-index: 4;
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            background: #0B0E14;
+            border: 1.5px solid rgba(245, 158, 11, 0.65);
+            box-shadow: 0 0 18px rgba(245, 158, 11, 0.45), inset 0 0 8px rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .orb-stage-wrapper:hover .orb-center-mic-badge {
+            transform: scale(1.08);
+            box-shadow: 0 0 25px rgba(245, 158, 11, 0.7);
+        }
+
+        /* -------------------------------------------------- */
+        /* Right Zone: Project Viewer Card                     */
+        /* -------------------------------------------------- */
+        .pv-glass-container {
+            background: rgba(12, 15, 22, 0.95);
             border: 1px solid #1E222B;
-            border-radius: 14px;
-            padding: 18px;
-            backdrop-filter: blur(18px);
-            margin-bottom: 14px;
+            border-radius: 16px;
+            padding: 14px 16px;
+            position: relative;
+            min-height: 480px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
         }
 
-        .glass-card:hover {
-            border-color: rgba(245, 158, 11, 0.35);
-        }
-
-        /* Terminal box */
-        .terminal-box {
-            background: #090B10;
-            color: #34D399;
-            font-family: 'JetBrains Mono', monospace;
+        .pv-meta-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 2px 8px 2px;
             font-size: 0.82rem;
-            padding: 0.85rem;
-            border-radius: 8px;
-            max-height: 220px;
-            overflow-y: auto;
-            border: 1px solid #1E222B;
-            white-space: pre-wrap;
+            border-bottom: 1px solid #1E222B;
+            margin-bottom: 10px;
         }
 
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 5px;
-            height: 5px;
+        .pv-file-path {
+            color: #F59E0B;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            text-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
         }
-        ::-webkit-scrollbar-track {
-            background: #060709;
+
+        .pv-file-size {
+            color: #64748B;
+            font-size: 0.76rem;
         }
-        ::-webkit-scrollbar-thumb {
-            background: #1E222B;
-            border-radius: 4px;
+
+        .pv-sparkle-decor {
+            position: absolute;
+            bottom: 12px;
+            right: 14px;
+            color: #E2E8F0;
+            font-size: 1.3rem;
+            opacity: 0.85;
+            pointer-events: none;
+            text-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
         }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #F59E0B;
+
+        /* Mobile responsiveness via CSS purely (@media max-width: 900px) */
+        @media (max-width: 900px) {
+            .header-center-dock {
+                display: none !important;
+            }
+            .sri-sticky-header {
+                padding: 0 14px !important;
+                height: 60px !important;
+                margin-left: -0.8rem !important;
+                margin-right: -0.8rem !important;
+            }
+            div[data-testid="stHorizontalBlock"] {
+                flex-direction: column !important;
+                gap: 18px !important;
+            }
+            div[data-testid="column"] {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+                min-width: 100% !important;
+            }
         }
     </style>
     <script>
@@ -3403,7 +3767,7 @@ def render_obsidian_theme_and_particles():
         });
 
         const colors = ['#F59E0B', '#D97706', '#FBBF24', '#B45309'];
-        const particleCount = 42;
+        const particleCount = 45;
         const particles = [];
         for (let i = 0; i < particleCount; i++) {
             particles.push({
@@ -3424,7 +3788,7 @@ def render_obsidian_theme_and_particles():
             ctx.clearRect(0, 0, width, height);
             time += 0.012;
 
-            // Drifting silk waves
+            // Dark drifting silk waves
             ctx.save();
             for (let w = 0; w < 3; w++) {
                 ctx.beginPath();
@@ -3477,20 +3841,48 @@ def render_obsidian_theme_and_particles():
 
 
 def render_sticky_top_header():
-    """Renders locked sticky top header with brand, live badge, and control drawer hint."""
+    """Renders locked sticky top header matching reference UI pixel-for-pixel."""
     header_html = """
     <div class="sri-sticky-header">
-        <div class="brand-title">
-            <span class="sri-text">SRI </span><span class="ai-text">AI.</span>
-            <span class="brand-tag">24/7 Cloud Autonomous Orchestrator</span>
+        <div class="brand-title-wrap">
+            <span class="brand-logo-editorial">SRI AI<span class="brand-period-gold">.</span></span>
         </div>
-        <div class="header-actions">
-            <div class="status-badge-active">
-                <span class="pulse-dot"></span>
-                <span>● 24/7 Active</span>
+        <div class="header-center-dock">
+            <div class="center-agent-pill">
+                <span class="gold-status-dot"></span>
+                <span>98.4% Agent Active</span>
             </div>
-            <div class="drawer-pill">
-                <span>⚙️ Control Drawer</span>
+        </div>
+        <div class="header-actions-right">
+            <div class="control-drawer-btn" onclick="
+                var btn = (window.parent && window.parent.document.querySelector('[data-testid=collapsedControl] button')) ||
+                          document.querySelector('[data-testid=collapsedControl] button') ||
+                          document.querySelector('[data-testid=stSidebarCollapseButton] button') ||
+                          (window.parent && window.parent.document.querySelector('[data-testid=stSidebarCollapseButton] button'));
+                if(btn) { btn.click(); }
+            " title="Open Technical Controls Drawer">
+                <svg class="drawer-sliders-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="4" y1="21" x2="4" y2="14"></line>
+                    <line x1="4" y1="10" x2="4" y2="3"></line>
+                    <line x1="12" y1="21" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12" y2="3"></line>
+                    <line x1="20" y1="21" x2="20" y2="16"></line>
+                    <line x1="20" y1="12" x2="20" y2="3"></line>
+                    <line x1="1" y1="14" x2="7" y2="14"></line>
+                    <line x1="9" y1="8" x2="15" y2="8"></line>
+                    <line x1="17" y1="16" x2="23" y2="16"></line>
+                </svg>
+                <div class="drawer-text-col">
+                    <span class="drawer-label-top">Control Drawer</span>
+                    <span class="drawer-label-sub">Sri (Ready)</span>
+                </div>
+            </div>
+            <div class="user-avatar-badge" title="Sri (Ready) — Online">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+                <span class="avatar-green-dot"></span>
             </div>
         </div>
     </div>
@@ -3498,9 +3890,8 @@ def render_sticky_top_header():
     st.markdown(header_html, unsafe_allow_html=True)
 
 
-# Render Ambient Obsidian Particle Engine & Sticky Top Header
-render_obsidian_theme_and_particles()
-render_sticky_top_header()
+# Render Obsidian Canvas, Floating Gold Particles & Sticky Top Header via SRI UI Bridge
+inject_sri_ui_and_particles()
 
 
 # ==============================================================================
@@ -3510,8 +3901,8 @@ with st.sidebar:
     st.markdown("### ⚙️ SRI Control Drawer")
     st.caption("Organized technical controls • 24/7 Decoupled Background Engine")
 
-    # EXPANDER a) Workspaces & Background Runner
-    with st.expander("🏢 a) Workspaces & Background Runner", expanded=False):
+    # 1. Workspaces & Background Runner
+    with st.expander("🏢 1. Workspaces & Background Runner", expanded=False):
         st.markdown("**📂 Workspace Directory Management:**")
         col_wa_in, col_wa_add = st.columns([3, 1])
         with col_wa_in:
@@ -3572,8 +3963,8 @@ with st.sidebar:
                 st.success(f"Started via {ai_engine}! Task ID: `{new_task_id}`")
                 st.rerun()
 
-    # EXPANDER b) Voice Engine & Task Routing
-    with st.expander("🎙️ b) Voice Engine & Task Routing", expanded=False):
+    # 2. Voice Engine & Task Routing
+    with st.expander("🎙️ 2. Voice Engine & Task Routing", expanded=False):
         sb_voice_choice = st.radio(
             "Transcription Route:",
             options=[
@@ -3629,8 +4020,8 @@ with st.sidebar:
             r_info = sri_voice_router.classify_intent(cur_p)
             st.info(f"🧭 **Route:** `{r_info['route']}` | **Engine:** `{r_info['engine']}`\n**Workspace:** `{r_info['target_workspace']}`")
 
-    # EXPANDER c) Model & API Router + Execution Gate
-    with st.expander("🛡️ c) Model & API Router + Execution Gate", expanded=False):
+    # 3. Model & API Router + Safety Gate
+    with st.expander("🛡️ 3. Model & API Router + Safety Gate", expanded=False):
         st.markdown("**Execution Gate & Approval Mode:**")
         auto_approve_toggle = st.toggle("🛡️ Execution Gate: Auto-Approve Mode", value=st.session_state.get("cfg_auto_approve", True), key="sb_auto_approve_toggle")
         st.session_state["cfg_auto_approve"] = auto_approve_toggle
@@ -3688,8 +4079,8 @@ with st.sidebar:
         st.caption("🟢 Tier 2: Antigravity Handoff Bridge Active")
         st.caption("🟢 Tier 3: Stitch AI UI Specialist Active")
 
-    # EXPANDER d) Twilio Voice Call & WhatsApp Bridge
-    with st.expander("📞 d) Twilio Voice Call & WhatsApp Bridge", expanded=False):
+    # 4. Twilio Voice Call & WhatsApp Bridge
+    with st.expander("📞 4. Twilio Voice Call & WhatsApp Bridge", expanded=False):
         admin_num = get_secret("ADMIN_PHONE_NUMBER", "Unconfigured")
         st.caption(f"Target Phone Number: `{admin_num}`")
         if st.button("📞 Call Me Now (Test Agent Alert)", key="sb_call_now_btn", use_container_width=True):
@@ -3716,8 +4107,8 @@ with st.sidebar:
             else:
                 st.error("Twilio WhatsApp client unavailable.")
 
-    # EXPANDER e) Safe Auto-Code Editor & File Upload
-    with st.expander("🛠️ e) Safe Auto-Code Editor & File Upload", expanded=False):
+    # 5. Safe Auto-Code Editor & File Upload
+    with st.expander("🛠️ 5. Safe Auto-Code Editor & File Upload", expanded=False):
         ws_flist = get_workspace_files()
         sb_cur_file = st.selectbox(
             "📁 Select file to inspect & refine:",
@@ -3778,8 +4169,8 @@ with st.sidebar:
                         st.toast("Auto-Edit running in background!")
                         st.rerun()
 
-    # EXPANDER f) SRI REST API Gateway & Webhook
-    with st.expander("🔌 f) SRI REST API Gateway & Webhook", expanded=False):
+    # 6. SRI REST API Gateway & Webhook
+    with st.expander("🔌 6. SRI REST API Gateway & Webhook", expanded=False):
         st.markdown(f"**Auth Secret:** `{sri_auth_secret}`")
         st.markdown("**Sample API Commands:**")
         st.code(
@@ -3790,8 +4181,8 @@ with st.sidebar:
             language="bash",
         )
 
-    # EXPANDER g) Execution Audit & Maintenance
-    with st.expander("📊 g) Execution Audit & Maintenance", expanded=False):
+    # 7. Execution Audit & Maintenance
+    with st.expander("📊 7. Execution Audit & Maintenance", expanded=False):
         st.markdown("**Task History & Maintenance:**")
         col_g1, col_g2 = st.columns(2)
         with col_g1:
@@ -3946,7 +4337,7 @@ def render_persistent_live_task_tracker():
 
             <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; color: #94A3B8; flex-wrap: wrap; gap: 6px;">
                 <span>🤖 <b>Engine:</b> {html.escape(active_engine)}</span>
-                <span>📁 <b>Target:</b> <code>workspace/{html.escape(folder)}</code></span>
+                <span>📁 <b>Target:</b> <code style="color: #F59E0B; text-shadow: 0 0 8px rgba(245, 158, 11, 0.4); font-weight: 700;">workspace/{html.escape(folder)}</code></span>
                 <span>⏱️ <b>Elapsed:</b> {elapsed_str}</span>
                 <span style="color: #F59E0B;">🔄 Live 5s sync</span>
             </div>
@@ -3981,7 +4372,7 @@ def render_persistent_live_task_tracker():
 
 
 # ==============================================================================
-# 11. RESPONSIVE SPATIAL MAIN SCREEN: DESKTOP 3-ZONE GRID & MOBILE 2-PAGE SWITCHER
+# 11. RESPONSIVE SPATIAL MAIN SCREEN: DESKTOP 3-ZONE GRID (NO TOP RADIO)
 # ==============================================================================
 restore_session_state_on_wakeup()
 
@@ -3990,38 +4381,11 @@ current_hour = datetime.now().hour
 greeting_period = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 17 else "Good evening")
 user_greeting = f"{greeting_period}, Kirubha — Agent Live"
 
-# View Switcher for Mobile (<900px) & Desktop (>=900px)
-mobile_nav_col1, mobile_nav_col2 = st.columns([3, 1])
-with mobile_nav_col1:
-    view_selection = st.radio(
-        "Navigation View",
-        options=["🖥️ 3-Zone Desktop Grid", "🎙️ Agent Hub (Mobile)", "👁️ Project View (Mobile)"],
-        index=0,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="sri_spatial_view_mode",
-    )
-with mobile_nav_col2:
-    st.caption("📱 Mobile & Desktop Responsive")
-
 
 # ------------------------------------------------------------------------------
 # RENDER ZONE 1: GREETING & RUNTIME METRICS
 # ------------------------------------------------------------------------------
 def render_zone_left():
-    st.markdown(
-        f"""
-        <div class="glass-card">
-            <div style="font-size: 1.15rem; font-weight: 800; color: #FFFFFF; margin-bottom: 2px;">
-                {html.escape(user_greeting)}
-            </div>
-            <div style="font-size: 0.8rem; color: #94A3B8; margin-bottom: 14px;">
-                Autonomous 24/7 Engine ready for Tamil & English commands.
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     db_state = load_db()
     metrics = db_state.get("metrics", {})
     all_tasks = db_state.get("tasks", {})
@@ -4029,108 +4393,93 @@ def render_zone_left():
     running_count = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
     completed_count = metrics.get("completed_tasks", 0)
     failed_count = metrics.get("failed_tasks", 0)
-    total_tokens = metrics.get("total_tokens", 0)
 
-    col_m1, col_m2 = st.columns(2)
-    col_m1.metric("Active", running_count)
-    col_m2.metric("Completed", completed_count)
+    # Dynamic time-of-day greeting matching reference UI
+    current_hour = datetime.now().hour
+    g_time = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 17 else "Good evening")
+    user_greet_sub = f"{g_time}, Kirubha"
 
-    col_m3, col_m4 = st.columns(2)
-    col_m3.metric("Failed", failed_count)
-    col_m4.metric("Est. Tokens", f"{total_tokens:,}")
-
-    st.markdown("---")
-    st.markdown(f"**Runtime:** `{RUNTIME_ENV['env_name']}`")
-    ws_files = get_workspace_files()
-    st.caption(f"📁 Workspace: `{len(ws_files)} files` | 📦 Outputs: `outputs/`")
-
-    st.markdown("---")
-    st.markdown("**⚡ Multi-AI Tier Status:**")
-    st.caption("🟢 Tier 1: Cloud LLMs (Gemini / OpenRouter Free)")
-    st.caption("🟢 Tier 2: Google Antigravity Bridge")
-    st.caption("🟢 Tier 3: Stitch AI Design System")
-    st.caption("🟢 Twilio Phone & WhatsApp: Active")
-    st.markdown("</div>", unsafe_allow_html=True)
+    left_html = f"""
+    <div style="padding: 2px 4px;">
+        <div class="left-zone-greeting">{user_greet_sub}</div>
+        <div class="left-zone-title">Agent Live</div>
+        <div class="metrics-list-card">
+            <div class="metric-row">
+                <span class="metric-label">Agent Status:</span>
+                <span class="metric-val-status"><span class="gold-dot">●</span> SRI (Ready)</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Active Tasks:</span>
+                <span class="metric-val"><span class="metric-dot">●</span> {running_count}</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Completed:</span>
+                <span class="metric-val"><span class="metric-dot">●</span> {completed_count}</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Failed:</span>
+                <span class="metric-val"><span class="metric-dot">●</span> {failed_count}</span>
+            </div>
+        </div>
+        <div class="env-runtime-heading">Environment & Runtime</div>
+        <div class="runtime-pills-row">
+            <span class="runtime-pill">Streamlit Cloud</span>
+            <span class="runtime-pill runtime-pill-gold">workspace/</span>
+        </div>
+    </div>
+    """
+    st.markdown(left_html, unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------------------------
-# RENDER ZONE 2: GOLDEN VOICE ORB, PILLS & UNIFIED PROMPT BAR
+# RENDER ZONE 2: 3D GOLDEN VOICE ORB, SINGLE-ROW PILLS & UNIFIED PROMPT BAR
 # ------------------------------------------------------------------------------
 def render_zone_center():
     # Persistent Live Task Tracker at top of Center Zone
     render_persistent_live_task_tracker()
 
-    # 3D Glowing Golden Neural Voice Orb
-    orb_html = """
-    <div class="voice-orb-wrapper" id="orb-trigger">
-        <div class="soundwave-ring ring-1"></div>
-        <div class="soundwave-ring ring-2"></div>
-        <div class="soundwave-ring ring-3"></div>
-        <div class="golden-neural-orb">
-            <div class="orb-core-glow"></div>
-            <div class="orb-icon">🎙️</div>
-        </div>
-    </div>
-    <div style="text-align: center; margin-bottom: 12px;">
-        <span style="font-size: 0.9rem; font-weight: 800; color: #F59E0B; letter-spacing: 0.6px;">
-            SRI NEURAL VOICE CORE
-        </span>
-        <div style="font-size: 0.78rem; color: #94A3B8; margin-top: 2px;">
-            Two-Way Conversational Assistant • Tamil & English Voice Interface
-        </div>
-    </div>
-    """
-    st.markdown(orb_html, unsafe_allow_html=True)
+    # EXACT 3D Golden Particle Sphere via SRI UI Bridge
+    render_3d_golden_orb()
 
-    # Horizontal Action Pills (Fast One-Click Queries)
-    st.markdown(
-        "<div style='font-size: 0.78rem; font-weight: 700; color: #A78BFA; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;'>💡 Quick Action & Status Pills</div>",
-        unsafe_allow_html=True,
-    )
-    p_c1, p_c2, p_c3 = st.columns(3)
-    with p_c1:
-        if st.button("📍 இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?", key="pill_q1", use_container_width=True):
-            st.session_state["task_prompt_val"] = "இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?"
-            st.session_state["active_voice_query"] = "இந்த ப்ராஜெக்ட் எங்க போயிட்டு இருக்கு?"
-    with p_c2:
-        if st.button("⚡ இப்ப என்ன பண்ணுது?", key="pill_q2", use_container_width=True):
-            st.session_state["task_prompt_val"] = "இப்ப என்ன பண்ணுது?"
-            st.session_state["active_voice_query"] = "இப்ப என்ன பண்ணுது?"
-    with p_c3:
-        if st.button("🤖 எந்த மாடல் யூஸ் பண்ணுது?", key="pill_q3", use_container_width=True):
-            st.session_state["task_prompt_val"] = "எந்த மாடல் யூஸ் பண்ணுது?"
-            st.session_state["active_voice_query"] = "எந்த மாடல் யூஸ் பண்ணுது?"
-
-    p_c4, p_c5, p_c6 = st.columns(3)
-    with p_c4:
-        if st.button("💻 Student Dashboard", key="pill_p1", use_container_width=True):
+    # Carousel pills with chevrons < Student Dashboard SaaS Auth Kanban Board Refine login.html >
+    col_prev, col_p1, col_p2, col_p3, col_p4, col_next = st.columns([0.35, 2.7, 2.1, 2.4, 2.7, 0.35])
+    with col_prev:
+        st.markdown("<div style='text-align: center; color: #64748B; font-size: 1rem; padding-top: 6px;'>&lt;</div>", unsafe_allow_html=True)
+    with col_p1:
+        if st.button("Student Dashboard", key="pill_student_db", use_container_width=True):
             st.session_state["task_prompt_val"] = "Build a responsive, modern student dashboard in HTML/CSS/JS with course progress charts, assignment tracker, and dark mode toggle."
             st.session_state["task_folder_val"] = "student_dashboard"
-    with p_c5:
-        if st.button("🔐 SaaS Auth Portal", key="pill_p2", use_container_width=True):
+    with col_p2:
+        if st.button("SaaS Auth", key="pill_saas_auth", use_container_width=True):
             st.session_state["task_prompt_val"] = "Create a sleek, modern SaaS Login and Registration page with tab switching, password strength meter, and social login buttons."
             st.session_state["task_folder_val"] = "saas_auth"
-    with p_c6:
-        if st.button("🏆 டாஸ்க் முடிஞ்சுடுச்சா?", key="pill_q4", use_container_width=True):
-            st.session_state["task_prompt_val"] = "டாஸ்க் முடிஞ்சுடுச்சா?"
-            st.session_state["active_voice_query"] = "டாஸ்க் முடிஞ்சுடுச்சா?"
+    with col_p3:
+        if st.button("Kanban Board", key="pill_kanban", use_container_width=True):
+            st.session_state["task_prompt_val"] = "Build an interactive Kanban board UI in single-file HTML/CSS/JS with drag-and-drop task cards, category columns, and task addition modal."
+            st.session_state["task_folder_val"] = "kanban_board"
+    with col_p4:
+        if st.button("Refine login.html", key="pill_refine_login", use_container_width=True):
+            st.session_state["task_prompt_val"] = "Refine workspace/login.html by adding password recovery modal, dark glassmorphism, and responsive validation."
+            st.session_state["task_folder_val"] = ""
+    with col_next:
+        st.markdown("<div style='text-align: center; color: #64748B; font-size: 1rem; padding-top: 6px;'>&gt;</div>", unsafe_allow_html=True)
 
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
 
-    # UNIFIED PROMPT BAR: Input box + compact Mic button (🎙️) and Gold Send button (➤) side-by-side
-    col_prompt_box, col_p_mic, col_p_send = st.columns([7.8, 1.1, 1.1])
+    # Gold-bordered prompt bar: "Ask SRI Agent a question (Tamil / English)..." with inline gold mic (🎙️) and send arrow (➤)
+    col_prompt_box, col_p_mic, col_p_send = st.columns([8.2, 0.9, 0.9])
     with col_prompt_box:
         prompt_input_text = st.text_input(
-            "Message SRI...",
+            "Ask SRI Agent a question (Tamil / English)...",
             value=st.session_state.get("task_prompt_val", ""),
-            placeholder="Message SRI... (Ask status in Tamil/English or describe a task)",
+            placeholder="Ask SRI Agent a question (Tamil / English)...",
             label_visibility="collapsed",
             key="unified_prompt_text_field",
         )
     with col_p_mic:
-        mic_pressed = st.button("🎙️", key="unified_mic_btn", help="Click to speak via microphone (Tamil/English)", use_container_width=True)
+        mic_pressed = st.button("🎙️", key="unified_mic_btn", help="Click to speak via microphone", use_container_width=True)
     with col_p_send:
-        send_pressed = st.button("➤", key="unified_send_btn", type="primary", help="Send command or ask question", use_container_width=True)
+        send_pressed = st.button("➤", key="unified_send_btn", help="Send command or ask question", use_container_width=True)
 
     # Handle Mic Click
     if mic_pressed:
@@ -4143,7 +4492,7 @@ def render_zone_center():
                     st.toast(f"குரல் பெறப்பட்டது: {spoken}")
                     st.rerun()
                 else:
-                    st.info("⚠️ மைக்ரோஃபோன் சிக்னல் கிடைக்கவில்லை. மேலேயுள்ள பெட்டியில் டைப் செய்யலாம்.")
+                    st.info("⚠️ மைக்ரோஃபோன் சிக்னல் கிடைக்கவில்லை. பெட்டியில் டைப் செய்யலாம்.")
             except Exception as me:
                 st.warning(f"Microphone notice: {me}")
 
@@ -4207,113 +4556,91 @@ def render_zone_center():
 # RENDER ZONE 3: SEGMENTED [ PREVIEW | CODE ] PROJECT VIEWER
 # ------------------------------------------------------------------------------
 def render_zone_right():
-    st.markdown(
-        "<div style='font-size: 0.88rem; font-weight: 800; color: #FFFFFF; margin-bottom: 6px;'>👁️ Project Viewer</div>",
-        unsafe_allow_html=True,
-    )
-
-    # Segmented Switcher [ Preview | Code ]
-    col_seg, col_exp = st.columns([2, 1])
+    # Segmented Switcher [ Preview | Code ] in Pill Track (Zero native radio dots)
+    col_seg, col_exp = st.columns([2.3, 0.7])
     with col_seg:
         viewer_mode = st.radio(
             "Viewer Mode",
-            options=["🌐 Preview", "💻 Code"],
+            options=["Preview", "Code"],
             index=0,
             horizontal=True,
             label_visibility="collapsed",
             key="sri_segmented_viewer_mode",
         )
     with col_exp:
-        full_height_toggle = st.toggle("⛶ Expand", value=False, key="pv_expand_toggle")
+        full_height_toggle = st.toggle("⛶", value=False, key="pv_expand_toggle", help="Full Height Preview")
 
-    # Available files from workspace and outputs
-    ws_files = get_workspace_files()
-    db_items = load_db()
-    completed_tasks = [
-        t for t in db_items.get("tasks", {}).values()
-        if t.get("status") == "COMPLETED" and t.get("output_file") and os.path.exists(t.get("output_file"))
-    ]
+    # Target file: default to workspace/login.html if present
+    target_rel = "login.html"
+    target_full = os.path.join(WORKSPACE_DIR, target_rel)
+    if not os.path.exists(target_full):
+        ws_files = get_workspace_files()
+        target_rel = ws_files[0] if ws_files else "login.html"
+        target_full = os.path.join(WORKSPACE_DIR, target_rel)
 
-    file_options = []
-    for wf in ws_files:
-        file_options.append(("workspace", wf, os.path.join(WORKSPACE_DIR, wf)))
-    for ct in completed_tasks:
-        file_options.append(("outputs", f"outputs/{os.path.basename(ct['output_file'])}", ct["output_file"]))
+    content = ""
+    file_size_bytes = 1881
+    if os.path.exists(target_full):
+        try:
+            with open(target_full, "r", encoding="utf-8") as f:
+                content = f.read()
+            file_size_bytes = len(content.encode("utf-8"))
+        except Exception:
+            pass
 
-    if not file_options:
-        st.info("No projects or files in workspace yet. Click '🌱 Seed login.html' in the Control Drawer or submit a task.")
-        return
+    preview_h = 750 if full_height_toggle else 430
 
-    selected_tuple = st.selectbox(
-        "Select Project File to View:",
-        options=file_options,
-        format_func=lambda x: f"[{x[0]}] {x[1]}",
-        key="pv_file_selector",
-        label_visibility="collapsed",
+    # Header metadata: workspace/login.html size: 1,881 bytes
+    st.markdown(
+        f"""
+        <div class="pv-meta-header">
+            <span class="pv-file-path">workspace/{html.escape(target_rel)}</span>
+            <span class="pv-file-size">size: {file_size_bytes:,} bytes</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    if selected_tuple:
-        _, display_name, full_path = selected_tuple
-        try:
-            with open(full_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
-            return
-
-        is_html = full_path.lower().endswith((".html", ".htm"))
-        preview_h = 750 if full_height_toggle else 480
-
-        if viewer_mode == "🌐 Preview":
-            if is_html:
-                components.html(content, height=preview_h, scrolling=True)
-            else:
-                st.info("This is a script/code file. Switch to '💻 Code' to view full source.")
+    if viewer_mode == "Preview":
+        if content:
+            components.html(content, height=preview_h, scrolling=True)
         else:
-            # Code View
-            st.caption(f"**Path:** `{full_path}` | **Size:** `{len(content):,} bytes`")
-            col_dl1, col_dl2 = st.columns(2)
-            with col_dl1:
-                st.download_button(
-                    "📥 Download Code File",
-                    data=content,
-                    file_name=os.path.basename(full_path),
-                    mime="text/html" if is_html else "text/plain",
-                    use_container_width=True,
-                    key=f"dl_single_{os.path.basename(full_path)}",
-                )
-            with col_dl2:
-                # One-click ZIP download of the project directory
-                parent_dir = os.path.dirname(full_path)
-                zip_bytes = create_project_zip_bundle(parent_dir if os.path.isdir(parent_dir) else full_path)
-                st.download_button(
-                    "📦 Download Full (.ZIP)",
-                    data=zip_bytes,
-                    file_name=f"{os.path.basename(parent_dir or 'project')}.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                    key=f"dl_zip_{os.path.basename(full_path)}",
-                )
+            st.info("No content in workspace/login.html yet.")
+    else:
+        # Code View with Download options
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            st.download_button(
+                "📥 Download File",
+                data=content,
+                file_name=os.path.basename(target_full),
+                mime="text/html",
+                use_container_width=True,
+                key=f"dl_single_{os.path.basename(target_full)}",
+            )
+        with col_dl2:
+            zip_bytes = create_project_zip_bundle(WORKSPACE_DIR)
+            st.download_button(
+                "📦 Download .ZIP",
+                data=zip_bytes,
+                file_name="workspace_project.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key="dl_zip_right_zone",
+            )
+        st.code(content, language="html", line_numbers=True)
 
-            code_language = "html" if is_html else ("python" if full_path.endswith(".py") else ("json" if full_path.endswith(".json") else "text"))
-            st.code(content, language=code_language, line_numbers=True)
+    # 4-pointed sparkle icon at bottom right of the container
+    st.markdown("<div class='pv-sparkle-decor'>✦</div>", unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------------------------
-# RENDER SPATIAL LAYOUT BASED ON SELECTION
+# RENDER DESKTOP 3-ZONE SPATIAL GRID (25% Left, 45% Center, 30% Right)
 # ------------------------------------------------------------------------------
-if view_selection == "🎙️ Agent Hub (Mobile)":
-    # Zero-scroll mobile Agent Hub view
+col_zone_left, col_zone_center, col_zone_right = st.columns([1, 1.8, 1.2])
+with col_zone_left:
+    render_zone_left()
+with col_zone_center:
     render_zone_center()
-elif view_selection == "👁️ Project View (Mobile)":
-    # Zero-scroll mobile Project Viewer
+with col_zone_right:
     render_zone_right()
-else:
-    # Desktop 3-Zone Grid (>= 900px)
-    col_zone_left, col_zone_center, col_zone_right = st.columns([1, 1.45, 1.45])
-    with col_zone_left:
-        render_zone_left()
-    with col_zone_center:
-        render_zone_center()
-    with col_zone_right:
-        render_zone_right()
