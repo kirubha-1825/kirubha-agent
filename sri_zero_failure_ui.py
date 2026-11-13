@@ -553,14 +553,10 @@ def render_sri_zero_failure_ui(
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #0A0C10;
-      border: 1px solid #1E222B;
-      border-radius: 999px;
-      padding: 4px;
-      margin: 6px 14px 14px 14px;
-      gap: 6px;
+      background: transparent;
+      padding: 8px 16px 48px 16px;
+      gap: 10px;
       flex-shrink: 0;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
       z-index: 10;
     }}
     .mob-nav-btn {{
@@ -829,7 +825,7 @@ def render_sri_zero_failure_ui(
       inlineRecognition.continuous = false;
       inlineRecognition.interimResults = true;
       inlineRecognition.maxAlternatives = 1;
-      inlineRecognition.lang = 'ta-IN'; // Tamil with Indian English phonetic support
+      inlineRecognition.lang = 'en-IN'; // en-IN primary for accurate greetings/technical terms + Tamil/Tanglish support
 
       inlineRecognition.onstart = () => {{
         inlineMicListening = true;
@@ -906,25 +902,38 @@ def render_sri_zero_failure_ui(
   }}
 
   // -------------------------------------------------------------
-  // STEP 4: Two-Way Conversational Voice on Center 3D Golden Orb
-  // Hands-free voice conversation mode: Listening -> Speaking (TTS) -> Backend
+  // STEP 4: Two-Way Hands-Free Continuous Conversational Voice on Center 3D Golden Orb
+  // Hands-free voice conversation loop: Listening -> Speaking (TTS) -> Auto Re-trigger
   // -------------------------------------------------------------
-  let orbMode = 'IDLE'; // 'IDLE' | 'LISTENING' | 'SPEAKING'
+  let orbMode = 'IDLE'; // 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING'
   let isOrbListening = false;
   let orbRecognition = null;
+  let continuousVoiceLoop = sessionStorage.getItem('sri_continuous_voice') === '1';
 
   function onOrbClick() {{
-    if (orbMode === 'SPEAKING') {{
+    // Clean "Tap sphere to stop" toggle
+    if (continuousVoiceLoop || isOrbListening || orbMode === 'SPEAKING' || orbMode === 'PROCESSING') {{
+      continuousVoiceLoop = false;
+      sessionStorage.removeItem('sri_continuous_voice');
+      sessionStorage.removeItem('sri_pending_voice_reply');
       if (window.speechSynthesis) window.speechSynthesis.cancel();
+      stopOrbListening();
       setOrbMode('IDLE');
       return;
     }}
-    if (isOrbListening) {{
-      stopOrbListening();
-      return;
-    }}
+
+    // Turn ON hands-free continuous voice loop & start listening immediately (0ms visual pulse)
+    continuousVoiceLoop = true;
+    sessionStorage.setItem('sri_continuous_voice', '1');
+    isOrbListening = true;
+    setOrbMode('LISTENING');
     startTwoWayVoiceSession();
   }}
+
+  function startClientVoice() {{
+    startTwoWayVoiceSession();
+  }}
+  window.startClientVoice = startClientVoice;
 
   function startTwoWayVoiceSession() {{
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -943,7 +952,7 @@ def render_sri_zero_failure_ui(
       orbRecognition.continuous = false;
       orbRecognition.interimResults = true;
       orbRecognition.maxAlternatives = 1;
-      orbRecognition.lang = 'ta-IN'; // Tamil with Indian English phonetic support
+      orbRecognition.lang = 'en-IN'; // en-IN primary for accurate greetings/technical terms + Tamil support
 
       orbRecognition.onstart = () => {{
         isOrbListening = true;
@@ -975,7 +984,9 @@ def render_sri_zero_failure_ui(
       orbRecognition.onerror = (event) => {{
         console.warn('Orb speech recognition notice:', event.error);
         isOrbListening = false;
-        setOrbMode('IDLE');
+        if (!continuousVoiceLoop) {{
+          setOrbMode('IDLE');
+        }}
       }};
 
       orbRecognition.onend = () => {{
@@ -984,7 +995,7 @@ def render_sri_zero_failure_ui(
           const val = document.getElementById('promptInput').value.trim();
           if (val) {{
             handleTwoWayVoiceTurn(val);
-          }} else {{
+          }} else if (!continuousVoiceLoop) {{
             setOrbMode('IDLE');
           }}
         }}
@@ -1013,30 +1024,11 @@ def render_sri_zero_failure_ui(
     }}
 
     const clean = spokenText.trim();
-    const isTamil = /[\u0B80-\u0BFF]/.test(clean) ||
-                    /(வணக்கம்|எங்க|என்ன|முடிஞ்சு|பண்ணு|வேலை|ஆப்|கோடு)/i.test(clean);
-
-    let replyVoiceText = "";
-    const lower = clean.toLowerCase();
-    const isInquiry = isTamil ?
-      /(எங்க|என்ன பண்ணுது|முடிஞ்சுதா|நிலை|மாடல்)/.test(clean) :
-      /(status|where|what|doing|model|progress|task)/.test(lower);
-
-    if (isInquiry) {{
-      replyVoiceText = isTamil ?
-        "வணக்கம்! ஸ்ரீ அனைத்து பின்னணி பணிகளையும் கண்காணித்துக் கொண்டிருக்கிறது." :
-        "SRI is actively running and monitoring your background tasks.";
-    }} else {{
-      replyVoiceText = isTamil ?
-        "உங்கள் பணி பெறப்பட்டது. ஸ்ரீ உடனே செயல்படுத்துகிறது." :
-        "Your task has been received. SRI is executing it now.";
-    }}
-
-    // Speak reply back aloud using window.speechSynthesis (TTS) while pulsing orb (Speaking...)
-    speakVoiceReply(replyVoiceText, () => {{
-      // After speech finishes, send transcript to backend (sri_cmd)
-      sendToPython(clean);
-    }});
+    // Instant visual pulse into thinking mode (No robotic canned replies)
+    setOrbMode('PROCESSING');
+    sessionStorage.setItem('sri_pending_voice_reply', '1');
+    sessionStorage.setItem('sri_continuous_voice', '1');
+    sendToPython(clean);
   }}
 
   function speakVoiceReply(text, onComplete) {{
@@ -1048,12 +1040,12 @@ def render_sri_zero_failure_ui(
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       const isTamil = /[\u0B80-\u0BFF]/.test(text);
-      utterance.lang = isTamil ? 'ta-IN' : 'en-US';
+      utterance.lang = isTamil ? 'ta-IN' : 'en-IN';
       utterance.rate = 1.0;
       utterance.pitch = 1.05;
 
       const voices = window.speechSynthesis.getVoices();
-      const matched = voices.find(v => v.lang && v.lang.toLowerCase().includes(isTamil ? 'ta' : 'en'));
+      const matched = voices.find(v => v.lang && (v.lang.toLowerCase().includes('in') || (isTamil ? v.lang.includes('ta') : v.lang.includes('en'))));
       if (matched) utterance.voice = matched;
 
       setOrbMode('SPEAKING');
@@ -1082,23 +1074,37 @@ def render_sri_zero_failure_ui(
     if (!hint) return;
 
     if (mode === 'LISTENING') {{
-      hint.innerHTML = '<span style="color:#F59E0B;font-weight:600;display:inline-flex;align-items:center;gap:6px;"><span class="dot-gold" style="animation:pulseDot 0.8s infinite alternate;"></span> 🎙️ Listening... (Tamil / English)</span>';
+      const stopText = continuousVoiceLoop ? 'Tap sphere to stop' : 'English / Tamil';
+      hint.innerHTML = `<span style="color:#F59E0B;font-weight:600;display:inline-flex;align-items:center;gap:6px;"><span class="dot-gold" style="animation:pulseDot 0.8s infinite alternate;"></span> 🎙️ Listening... (${{stopText}})</span>`;
+    }} else if (mode === 'PROCESSING') {{
+      hint.innerHTML = '<span style="color:#F59E0B;font-weight:600;display:inline-flex;align-items:center;gap:6px;"><span class="dot-gold" style="animation:pulseDot 0.5s infinite alternate;"></span> ⚡ Thinking... (SRI AI)</span>';
     }} else if (mode === 'SPEAKING') {{
-      hint.innerHTML = '<span style="color:#10B981;font-weight:600;display:inline-flex;align-items:center;gap:6px;"><span class="dot-green" style="animation:pulseDot 0.8s infinite alternate;"></span> 🔊 Speaking...</span>';
+      const stopText = continuousVoiceLoop ? 'Tap sphere to stop' : 'Live Agent';
+      hint.innerHTML = `<span style="color:#10B981;font-weight:600;display:inline-flex;align-items:center;gap:6px;"><span class="dot-green" style="animation:pulseDot 0.8s infinite alternate;"></span> 🔊 Speaking... (${{stopText}})</span>`;
     }} else {{
       hint.innerHTML = 'Tap the golden sphere to talk with SRI in Tamil or English';
     }}
   }}
 
-  // Check for newly loaded agent response from backend to speak aloud if pending
+  // Proactively speak back newly returned executive agent response from LLM
+  // And if continuousVoiceLoop is active, automatically re-trigger listening once speaking completes!
   try {{
-    if (STATE.messages && STATE.messages.length > 0) {{
-      const last = STATE.messages[STATE.messages.length - 1];
-      const spokenKey = 'sri_spoken_' + (last.agent || '').slice(0, 25);
-      if (last.agent && !sessionStorage.getItem(spokenKey)) {{
-        sessionStorage.setItem(spokenKey, '1');
-        if (last.agent.includes('வணக்கம்') || last.agent.includes('Hello') || last.agent.includes('Task SRI-')) {{
-          setTimeout(() => {{ speakVoiceReply(last.agent); }}, 500);
+    if (sessionStorage.getItem('sri_pending_voice_reply') === '1') {{
+      sessionStorage.removeItem('sri_pending_voice_reply');
+      if (STATE.messages && STATE.messages.length > 0) {{
+        const last = STATE.messages[STATE.messages.length - 1];
+        if (last && last.agent) {{
+          setTimeout(() => {{
+            speakVoiceReply(last.agent, () => {{
+              if (continuousVoiceLoop) {{
+                setTimeout(() => {{
+                  if (continuousVoiceLoop) {{
+                    startTwoWayVoiceSession();
+                  }}
+                }}, 750);
+              }}
+            }});
+          }}, 100);
         }}
       }}
     }}
