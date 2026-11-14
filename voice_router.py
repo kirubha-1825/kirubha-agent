@@ -194,3 +194,110 @@ def parse_voice_command(text: str, default_folder: str = "") -> Dict[str, Any]:
         "explanation": explanation
     }
 
+
+# ==============================================================================
+# CRYSTAL-CLEAR NATURAL VOICE SYNTHESIS & PACING CONTROLLER
+# ==============================================================================
+
+def clean_text_for_natural_speech(text: str) -> str:
+    """
+    Cleans and conditions text for warm, human-like voice synthesis:
+    - Expands contractions into smooth phonetic pronunciations
+    - Strips code symbols, markdown asterisks, hashtags, backticks, emojis
+    - Eliminates robotic phrasing and duplicate punctuation
+    """
+    if not text:
+        return ""
+    replacements = {
+        "I'm": "I am", "i'm": "I am",
+        "what's": "what is", "What's": "What is",
+        "let's": "let us", "Let's": "Let us",
+        "don't": "do not", "Don't": "Do not",
+        "can't": "cannot", "Can't": "Cannot",
+        "won't": "will not", "Won't": "Will not",
+        "it's": "it is", "It's": "It is",
+        "that's": "that is", "That's": "That is",
+        "you're": "you are", "You're": "You are",
+        "we're": "we are", "We're": "We are",
+        "they're": "they are", "They're": "They are",
+        "I've": "I have", "I'll": "I will", "I'd": "I would"
+    }
+    cleaned = text
+    for k, v in replacements.items():
+        cleaned = cleaned.replace(k, v)
+    cleaned = re.sub(r"^SRI:\s*", "", cleaned.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"[*_`#~\[\](){}<>|\\]", " ", cleaned)
+    cleaned = re.sub(r"['\"]", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def detect_speech_voice_profile(text: str) -> Dict[str, str]:
+    """
+    Selects warm regional neural voices for crystal-clear natural synthesis:
+    - Tamil: ta-IN-PallaviNeural
+    - English: en-IN-NeerjaNeural
+    - Hindi: hi-IN-SwaraNeural
+    """
+    if re.search(r"[\u0B80-\u0BFF]", text):
+        return {
+            "lang": "ta-IN",
+            "neural_voice": "ta-IN-PallaviNeural",
+            "rate": "+0%",
+            "pitch": "+0Hz",
+            "pacing_style": "warm_conversational"
+        }
+    if re.search(r"[\u0900-\u097F]", text):
+        return {
+            "lang": "hi-IN",
+            "neural_voice": "hi-IN-SwaraNeural",
+            "rate": "+0%",
+            "pitch": "+0Hz",
+            "pacing_style": "warm_conversational"
+        }
+    return {
+        "lang": "en-IN",
+        "neural_voice": "en-IN-NeerjaNeural",
+        "rate": "+0%",
+        "pitch": "+0Hz",
+        "pacing_style": "warm_conversational"
+    }
+
+
+def format_paced_voice_response(user_query: str, raw_response: str) -> str:
+    """
+    Contextual Response Pacing:
+    - Casual queries / Greetings: Crisp, natural 1-2 sentence replies (under 28 words).
+    - Mentoring, Hackathon ideas, Project discussions: Well-paced, structured, and thoughtful explanations (up to 3 articulate sentences, max 48 words).
+    """
+    clean_text = clean_text_for_natural_speech(raw_response)
+    if not clean_text:
+        return "Hey Kirubha! சொல்லுங்க, what's our next step?"
+
+    q_lower = (user_query or "").lower().strip()
+    is_complex_or_mentor = any(k in q_lower for k in [
+        "hackathon", "ஹேக்கத்தான்", "mentor", "idea", "feature", "score",
+        "win", "architecture", "flutter", "logic", "how", "why", "strategy",
+        "student", "design", "explain", "improve", "code"
+    ])
+
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', clean_text) if s.strip()]
+
+    if is_complex_or_mentor:
+        # Structured, articulate, thoughtful (up to 3 sentences, max 48 words)
+        max_sentences = 3
+        max_words = 48
+    else:
+        # Casual query (crisp, natural 1-2 sentences, max 28 words)
+        max_sentences = 2
+        max_words = 28
+
+    if len(sentences) > max_sentences:
+        clean_text = " ".join(sentences[:max_sentences])
+
+    words = clean_text.split()
+    if len(words) > max_words:
+        clean_text = " ".join(words[:max_words]) + "."
+
+    return clean_text
+

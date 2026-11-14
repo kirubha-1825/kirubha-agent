@@ -103,6 +103,8 @@ from voice_router import (
     parse_voice_command,
     detect_antigravity_intent,
     detect_stitch_ai_intent,
+    format_paced_voice_response,
+    clean_text_for_natural_speech,
 )
 from llm_router import execute_tier1_cloud_llm, OPENROUTER_FREE_MODELS
 from antigravity_bridge_listener import (
@@ -4254,6 +4256,46 @@ with st.sidebar:
             """
             st.markdown(audit_tbl_html, unsafe_allow_html=True)
 
+    # ===========================================================================
+    # 8. 📜 HISTORY — Persistent Task & Chat Log (sri_tasks_history.json)
+    # ===========================================================================
+    with st.expander("📜 8. Task & Chat History", expanded=False):
+        from sri_history_store import (
+            load_history as _load_hist,
+            clear_history as _clear_hist,
+            search_history as _search_hist,
+            build_history_sidebar_html as _hist_html,
+        )
+
+        col_hq, col_hclr = st.columns([3, 1])
+        with col_hq:
+            hist_search_q = st.text_input(
+                "🔍 Search history",
+                placeholder="Filter tasks or replies…",
+                key="sb_hist_search",
+                label_visibility="collapsed",
+            )
+        with col_hclr:
+            if st.button("🗑️ Clear All", key="sb_hist_clear_btn", use_container_width=True):
+                cleared = _clear_hist()
+                st.session_state.history_log = []
+                st.toast(f"🗑️ Cleared {cleared} history entries.", icon="✅")
+                st.rerun()
+
+        hist_entries = (
+            _search_hist(hist_search_q, limit=100)
+            if hist_search_q
+            else _load_hist()[-100:]
+        )
+        st.caption(f"📌 {len(hist_entries)} {'match' if hist_search_q else 'recent'} entr{'y' if len(hist_entries)==1 else 'ies'} · stored in `sri_tasks_history.json`")
+        hist_sidebar_html = _hist_html(hist_entries)
+        st.markdown(
+            f'<div style="max-height:420px;overflow-y:auto;padding-right:4px;">'
+            f"{hist_sidebar_html}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
 
 # ==============================================================================
 # 10. PERSISTENT LIVE TASK TRACKER (5S NON-BLOCKING FRAGMENT)
@@ -4799,6 +4841,46 @@ def call_fast_voice_llm(prompt: str, system_instruction: str = "", max_tokens: i
     raise RuntimeError("Fast voice models unavailable.")
 
 
+# ==============================================================================
+# AGENT BRAIN & SMART HACKATHON MENTOR INLINE CARD
+# ==============================================================================
+def build_smart_mentor_inline_card(user_prompt: str, reply_text: str) -> str:
+    """
+    Renders an inline Tiger-Gold Obsidian card for the Agent Brain & Smart Mentor:
+    Answers any general query, live news, or task status with proactive developer & hackathon recommendations.
+    """
+    t_stamp = datetime.now().strftime("%I:%M %p")
+    clean_p = html.escape(user_prompt)
+    clean_r = html.escape(reply_text)
+    card_html = f"""
+    <div class="slide-inline-card" style="font-family:'Inter',sans-serif;color:#F4F4F5;padding:4px;">
+      <div style="background:linear-gradient(135deg,rgba(245,158,11,0.18),rgba(16,185,129,0.08));border:1px solid rgba(245,158,11,0.5);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 8px 24px rgba(0,0,0,0.6);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span style="font-size:11px;color:#F59E0B;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;">✦ SRI Agent Brain & Smart Mentor</span>
+          <span style="font-size:10px;color:#9CA3AF;background:#141821;border:1px solid #222630;padding:2px 8px;border-radius:999px;">⏱️ {t_stamp}</span>
+        </div>
+        <div style="font-size:12px;color:#D1D5DB;margin-bottom:6px;"><strong>Inquiry:</strong> &ldquo;{clean_p}&rdquo;</div>
+        <div style="font-size:13.5px;line-height:1.55;color:#FFFFFF;background:#060709;border-left:3px solid #10B981;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+          {clean_r}
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">
+        <div style="background:#0E1117;border:1px solid #222630;border-left:3px solid #F59E0B;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#E5E7EB;">
+          <strong style="color:#F59E0B;">🚀 Hackathon Winning Strategy:</strong> AI-driven adaptive recommendations & real-time analytics engine.
+        </div>
+        <div style="background:#0E1117;border:1px solid #222630;border-left:3px solid #10B981;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#E5E7EB;">
+          <strong style="color:#10B981;">⚡ Teammate Code Polish:</strong> Responsive touch gestures, zero-latency caching & biometric login integration.
+        </div>
+        <div style="background:#0E1117;border:1px solid #222630;border-left:3px solid #60A5FA;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#E5E7EB;">
+          <strong style="color:#60A5FA;">📁 Active Projects:</strong> <code>workspace/student_learning_hub</code> & <code>workspace/login.html</code>
+        </div>
+      </div>
+    </div>
+    """
+    return card_html
+
+
 def get_executive_voice_response(
     user_query: str,
     active_tasks_count: int,
@@ -4878,18 +4960,7 @@ def get_executive_voice_response(
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
         if reply and len(reply.strip()) > 3:
-            clean_reply = re.sub(r'[*#`_]', '', reply).strip()
-            # Contextual Response Style: crisp 1-2 sentences for casual, structured & thoughtful for complex/hackathon
-            sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', clean_reply) if s.strip()]
-            is_deep_topic = any(w in q_low for w in ["hackathon", "ஹேக்கத்தான்", "explain", "architecture", "flutter", "logic", "how", "why", "mentor", "idea", "strategy"])
-            max_sentences = 3 if is_deep_topic else 2
-            max_words = 45 if is_deep_topic else 28
-            if len(sentences) > max_sentences:
-                clean_reply = " ".join(sentences[:max_sentences])
-            words = clean_reply.split()
-            if len(words) > max_words:
-                clean_reply = " ".join(words[:max_words]) + "."
-            return clean_reply
+            return format_paced_voice_response(clean_q, reply)
     except Exception as e:
         print(f"⚠️ Fast voice phone-call LLM notice: {e}")
 
@@ -4939,11 +5010,17 @@ st.text_input(
 # [Step 1 Integration: Golden Sphere & Live Smart Mentor Handler]
 # ==============================================================================
 def render_agent_brain_hub():
+    """
+    Central Golden Sphere & Mic Interface - Acts strictly as the 'Agent Brain & Smart Mentor'
+    (completely separate from the bottom chat input bar).
+    Initiates live voice interaction mode answering any general query, live news, or task status,
+    proactively proposing hackathon-winning improvements.
+    """
     if "voice_mode" not in st.session_state:
         st.session_state.voice_mode = "hub"
 
     # Central Golden Sphere interaction logic
-    if st.button("✨ Tap to Talk with SRI (Smart Mentor)", use_container_width=True):
+    if st.button("✨ Tap to Talk with SRI (Agent Brain & Smart Mentor)", use_container_width=True):
         st.session_state.voice_mode = "live_call"
         st.info("கிருபா! ஹேக்கத்தானில் அதிக மதிப்பெண்கள் பெற நாம் இந்த லாகின் மாடியூல் மற்றும் அம்சங்களைச் சேர்க்கலாம்...")
 
@@ -4952,18 +5029,64 @@ def render_agent_brain_hub():
 # [Step 2 Integration: Bottom Chat Box & Task Input Area (Independent)]
 # ==============================================================================
 def render_task_input_bar():
+    """
+    Bottom Chat Input Bar (st.chat_input and attached dictation mic):
+    - Completely independent of the central golden sphere (Agent Brain).
+    - Tapping the chat box mic ONLY transcribes Tamil or English speech into text inside the input box.
+    - The task or prompt is queued and executed ONLY when the user explicitly clicks the 'Send' button.
+    """
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Task input chat box with separate mic & send button logic
-    # Dictated text populates here, and execution happens ONLY on clicking Send.
-    user_task_input = st.chat_input("Message SRI (or tap mic to dictate task)...")
+    if "chat_dictated_text" not in st.session_state:
+        st.session_state.chat_dictated_text = ""
+
+    # Attached mic dictation: transcribes speech to text only, never auto-triggers voice calls or tasks
+    if MIC_RECORDER_AVAILABLE and mic_recorder:
+        col_mic, col_status = st.columns([1, 4])
+        with col_mic:
+            audio_record = mic_recorder(
+                start_prompt="🎙️ Chat Mic (Dictate)",
+                stop_prompt="⏹️ Done",
+                key="chat_input_attached_mic",
+                just_once=True,
+                use_container_width=True,
+            )
+            if audio_record and audio_record.get("bytes"):
+                try:
+                    import speech_recognition as sr
+                    recognizer = sr.Recognizer()
+                    audio_file = io.BytesIO(audio_record["bytes"])
+                    with sr.AudioFile(audio_file) as src:
+                        audio = recognizer.record(src)
+                    # Support Tamil or English speech transcription via dynamically attached recognizer
+                    recognize_google = getattr(recognizer, "recognize_google", None)
+                    transcribed_text = ""
+                    if callable(recognize_google):
+                        try:
+                            transcribed_text = str(recognize_google(audio, language="ta-IN"))
+                        except Exception:
+                            transcribed_text = str(recognize_google(audio, language="en-IN"))
+                    if transcribed_text:
+                        st.session_state.chat_dictated_text = transcribed_text
+                        st.toast(f"🎙️ Transcribed into chat: {transcribed_text}", icon="📝")
+                except Exception as e:
+                    print(f"ℹ️ Chat mic transcription note: {e}")
+
+    # Prompt placeholder reflecting transcribed speech or default prompt
+    current_placeholder = "Message SRI (or tap mic to dictate task)..."
+    if st.session_state.get("chat_dictated_text"):
+        st.caption(f"📝 *Dictated Text:* `{st.session_state.chat_dictated_text}` — Click Send to execute.")
+
+    user_task_input = st.chat_input(current_placeholder)
 
     if user_task_input:
-        # Save to current task session state
-        st.session_state.current_task_prompt = user_task_input
-        st.session_state["task_prompt_val"] = user_task_input
-        save_to_history("Task Queued", user_task_input)
-        st.info(f"📌 Task Queued: {user_task_input}")
+        # User explicitly clicked Send
+        final_prompt = user_task_input.strip()
+        st.session_state.current_task_prompt = final_prompt
+        st.session_state["task_prompt_val"] = final_prompt
+        st.session_state.chat_dictated_text = ""
+        save_to_history("Task Queued", final_prompt, "chat")
+        st.info(f"📌 Task Queued: {final_prompt}")
         # Task execution logic runs here upon clicking send
 
 
@@ -4989,20 +5112,74 @@ configure_voice_output_settings()
 # [Step 4 Integration: UI Layout & Original Position Fix CSS]
 # ==============================================================================
 def apply_ui_layout_fixes():
+    """
+    Step 4: UI Layout & Original Position Fix CSS.
+    Restores the centered mobile-first layout (max-width: 480px) for the
+    Streamlit fallback/legacy zone. The primary full-viewport UI is served
+    inside sri_zero_failure_ui's iframe which manages its own CSS.
+    This block also resets slide-inline-card & preview drawers so they
+    render naturally in their original lower position without overlapping
+    or being pushed into the header area.
+    """
     st.markdown("""
     <style>
-        /* Reset layout container to original clean mobile view */
+        /* ── Streamlit host page: mobile-first centered container ──────────── */
         .main .block-container {
-            padding-top: 1rem;
-            padding-bottom: 5rem;
-            max-width: 480px;
-            margin: 0 auto;
+            padding-top: 0 !important;
+            padding-bottom: 0 !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+            max-width: 100% !important;
+            margin: 0 !important;
         }
-        /* Fix preview card / slide drawer position back to normal */
+
+        /* The full-viewport iframe rendered by sri_zero_failure_ui
+           must stretch edge-to-edge — override any stray iframe caps */
+        .main .block-container iframe {
+            display: block !important;
+            width: 100vw !important;
+            height: 100dvh !important;
+            border: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* ── slide-inline-card: prevent float / absolute position bleed ────── */
+        /* Ensures the card renders in the natural document flow, below its
+           preceding sibling content, with no translate/position override
+           that could push it into the header or cause overlap. */
         .slide-inline-card {
+            position: relative !important;
+            top: auto !important;
+            left: auto !important;
+            transform: none !important;
             margin-top: 10px;
             margin-bottom: 20px;
-            transform: none !important;
+            width: 100%;
+            box-sizing: border-box;
+            z-index: 1;
+        }
+
+        /* ── Inline drawer / preview box reset ─────────────────────────────── */
+        /* Keeps the inline preview drawer in flow; no absolute/fixed stacking */
+        .stSlider, .stExpander, [data-testid="stExpander"],
+        [data-testid="stVerticalBlock"] > div:has(.slide-inline-card) {
+            position: relative !important;
+            z-index: auto !important;
+            overflow: visible !important;
+        }
+
+        /* ── Mobile-first max-width cap for the legacy/fallback Streamlit UI ─ */
+        @media (max-width: 900px) {
+            .main .block-container {
+                max-width: 480px !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+                padding-left: 0 !important;
+                padding-right: 0 !important;
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+            }
         }
     </style>
     """, unsafe_allow_html=True)
@@ -5011,27 +5188,51 @@ apply_ui_layout_fixes()
 
 
 # ==============================================================================
-# [Step 5 Integration: Task & Chat History Storage Logic]
+# [Step 5 Integration: Persistent Task & Chat History Storage]
+# Writes every interaction to sri_tasks_history.json via sri_history_store.
+# Session-state history_log is kept in sync so the UI panel always has
+# the full picture including entries from previous sessions.
 # ==============================================================================
 import time
+from sri_history_store import (
+    append_entry       as _hist_append,
+    load_history       as _hist_load,
+    get_history_for_ui as _hist_for_ui,
+)
 
+# Seed session-state from persistent file (merge, don't overwrite)
 if "history_log" not in st.session_state:
-    st.session_state.history_log = []
+    st.session_state.history_log = _hist_load()
+elif not st.session_state.history_log:
+    st.session_state.history_log = _hist_load()
 
-def save_to_history(task_name, details):
-    st.session_state.history_log.append({
-        "task": task_name,
-        "details": details,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-    })
 
-def render_history_view():
+def save_to_history(task_name: str, details: str, entry_type: str = "task") -> None:
+    """
+    Append one interaction to both the persistent JSON store and the
+    in-memory session_state.history_log.
+    """
+    entry = _hist_append(task_name, details, entry_type)
+    # Keep session_state in sync so the UI history panel updates immediately
+    if "history_log" not in st.session_state:
+        st.session_state.history_log = []
+    st.session_state.history_log.append(entry)
+
+
+def render_history_view() -> None:
+    """Render the full history log in the Streamlit sidebar (legacy helper)."""
+    from sri_history_store import build_history_sidebar_html as _hist_html
+    entries = st.session_state.get("history_log", [])
     st.markdown("### 📜 Task & Chat History")
-    if not st.session_state.history_log:
+    if not entries:
         st.info("No history recorded yet.")
     else:
-        for item in st.session_state.history_log:
-            st.info(f"[{item['timestamp']}] *{item['task']}*: {item['details']}")
+        st.markdown(
+            f'<div style="max-height:500px;overflow-y:auto;">'
+            f"{_hist_html(entries)}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # 2. Read bridge command or query params and route through Fast Conversational Voice Agent
@@ -5101,13 +5302,20 @@ if cmd:
             research_summary=research_summary,
         )
 
+        if not is_research_query:
+            generated_preview_html = build_smart_mentor_inline_card(effective_prompt, reply_spoken)
+            workspace_file_label = "Agent Brain & Smart Mentor Brief"
+
         st.session_state["sri_chat_history"].append({"user": effective_prompt, "agent": reply_spoken})
-        save_to_history(effective_prompt, reply_spoken)
+        # Determine entry type for richer history categorisation
+        _hist_type = "research" if is_research_query else "voice"
+        save_to_history(effective_prompt, reply_spoken, _hist_type)
         st.toast(f"🤖 SRI: {reply_spoken}", icon="🗣️")
         # Notice: Audio synthesis is handled exclusively by sri_zero_failure_ui's 3D orb component
         # so there is never duplicate or conflicting audio playback!
 
 # 3. Call render_sri_zero_failure_ui to render the full-viewport UI
+# Always use the persistent store for the history panel (covers past sessions)
 render_sri_zero_failure_ui(
     agent_status=agent_status_str,
     active_tasks=running_count,
@@ -5118,7 +5326,7 @@ render_sri_zero_failure_ui(
     generated_preview_html=generated_preview_html,
     chat_history=st.session_state.get("sri_chat_history", []),
     voice_reply_text=reply_spoken,
-    history_log=st.session_state.get("history_log", []),
+    history_log=_hist_for_ui(limit=200),
 )
 
 

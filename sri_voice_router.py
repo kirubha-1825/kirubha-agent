@@ -156,5 +156,104 @@ class SriMasterVoiceRouter:
                 if not self.design_guard.authorize_design_task(self.valid_key, "FRONTEND_UI_DESIGN", tf):
                     return False, classification, f"SriDesignAndLaunchGuard Auto-Kill: Disallowed file {tf}"
 
+        # Natural warm spoken voice announcement for routing
+        if classification["route"] == "DESIGN":
+            spoken_announcement = "கிருபா! இந்த UI டிசைன் பணிக்காக Stitch AI என்ஜின் தயார். அழகான ரெஸ்பான்சிவ் லேஅவுட் உருவாக்கிடலாம்!"
+        elif classification["route"] == "CODING":
+            spoken_announcement = "Hey Kirubha! Gemini Pro and Antigravity core are ready for this coding logic. Starting now!"
+        else:
+            spoken_announcement = "Hey Kirubha! OpenRouter reasoning engine is analyzing this across multiple models now."
+
+        classification["voice_announcement"] = self.format_mentor_response_pacing(prompt, spoken_announcement)
+        classification["voice_profile"] = self.get_warm_voice_profile(spoken_announcement)
+
         return True, classification, ""
+
+    def clean_speech_script(self, text: str) -> str:
+        """Phonetically conditions text for warm, human-like voice synthesis."""
+        if not text:
+            return ""
+        replacements = {
+            "I'm": "I am", "i'm": "I am",
+            "what's": "what is", "What's": "What is",
+            "let's": "let us", "Let's": "Let us",
+            "don't": "do not", "Don't": "Do not",
+            "can't": "cannot", "Can't": "Cannot",
+            "won't": "will not", "Won't": "Will not",
+            "it's": "it is", "It's": "It is",
+            "that's": "that is", "That's": "That is",
+            "you're": "you are", "You're": "You are",
+            "we're": "we are", "We're": "We are",
+            "they're": "they are", "They're": "They are",
+            "I've": "I have", "I'll": "I will", "I'd": "I would"
+        }
+        cleaned = text
+        for k, v in replacements.items():
+            cleaned = cleaned.replace(k, v)
+        cleaned = re.sub(r"^SRI:\s*", "", cleaned.strip(), flags=re.IGNORECASE)
+        cleaned = re.sub(r"[*_`#~\[\](){}<>|\\]", " ", cleaned)
+        cleaned = re.sub(r"['\"]", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
+    def get_warm_voice_profile(self, text: str) -> Dict[str, str]:
+        """Returns neural voice profile calibrated for relaxed, warm, crystal-clear pacing."""
+        if re.search(r"[\u0B80-\u0BFF]", text):
+            return {
+                "lang": "ta-IN",
+                "neural_voice": "ta-IN-PallaviNeural",
+                "rate": "+0%",
+                "pitch": "+0Hz",
+                "pacing": "warm_natural"
+            }
+        if re.search(r"[\u0900-\u097F]", text):
+            return {
+                "lang": "hi-IN",
+                "neural_voice": "hi-IN-SwaraNeural",
+                "rate": "+0%",
+                "pitch": "+0Hz",
+                "pacing": "warm_natural"
+            }
+        return {
+            "lang": "en-IN",
+            "neural_voice": "en-IN-NeerjaNeural",
+            "rate": "+0%",
+            "pitch": "+0Hz",
+            "pacing": "warm_natural"
+        }
+
+    def format_mentor_response_pacing(self, query: str, response: str) -> str:
+        """
+        Ensures the agent speaks in a crystal-clear, warm, natural human-like pace:
+        - Casual answers: concise (1-2 sentences, under 28 words).
+        - Mentoring / Project discussions: well-paced, structured explanations (up to 3 articulate sentences, max 48 words).
+        """
+        clean_text = self.clean_speech_script(response)
+        if not clean_text:
+            return "Hey Kirubha! சொல்லுங்க, what's our next step?"
+
+        q_lower = (query or "").lower().strip()
+        is_mentor_topic = any(k in q_lower for k in [
+            "hackathon", "ஹேக்கத்தான்", "mentor", "idea", "feature", "score",
+            "win", "architecture", "flutter", "logic", "how", "why", "strategy",
+            "student", "design", "explain", "improve", "code"
+        ])
+
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', clean_text) if s.strip()]
+
+        if is_mentor_topic:
+            max_sentences = 3
+            max_words = 48
+        else:
+            max_sentences = 2
+            max_words = 28
+
+        if len(sentences) > max_sentences:
+            clean_text = " ".join(sentences[:max_sentences])
+
+        words = clean_text.split()
+        if len(words) > max_words:
+            clean_text = " ".join(words[:max_words]) + "."
+
+        return clean_text
 

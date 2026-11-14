@@ -144,7 +144,7 @@ def render_sri_zero_failure_ui(
         background-color: #060709 !important;
         margin: 0 !important;
         padding: 0 !important;
-        overflow: hidden !important;
+        overflow: clip !important;
     }
     [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu, footer,
     [data-testid="stHeader"], [data-testid="stToastContainer"], [data-testid="stToast"] {
@@ -155,6 +155,7 @@ def render_sri_zero_failure_ui(
         margin: 0 !important;
         max-width: 100vw !important;
     }
+        overflow: visible !important;
     [data-testid="stSidebar"] {
         background-color: #090B0E !important;
         border-left: 1px solid rgba(245, 158, 11, 0.35) !important;
@@ -165,6 +166,8 @@ def render_sri_zero_failure_ui(
         border: none !important;
         width: 100vw !important;
         height: 100dvh !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
     </style>
     """,
@@ -326,23 +329,26 @@ def render_sri_zero_failure_ui(
     min-height: 0;
   }
   .left-col { display: flex; flex-direction: column; justify-content: space-between; }
+  /* center-col: scrollable so inline-card stacks naturally below the orb */
+  .center-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+    scrollbar-width: none;
+  }
+  .center-col::-webkit-scrollbar { display: none; }
   .stat-row {
     display: flex; justify-content: space-between; padding: 10px 0;
     border-bottom: 1px solid #181B22; font-size: 13.5px; color: #9CA3AF;
   }
   .gold-val { color: #F59E0B; font-weight: 600; }
 
-  /* Center Column */
-  .center-col {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
-    overflow: hidden;
-    min-height: 0;
-  }
   .orb-wrap {
-    flex: 1;
+    flex: 0 0 auto;
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -551,17 +557,45 @@ def render_sri_zero_failure_ui(
       max-width: 480px;
       margin: 0 auto;
       width: 100%;
+      /* Ensure children stack naturally — no overflow clip that cuts content */
+      overflow: visible;
+      min-height: 0;
     }
+
+    /* slide-inline-card: render in normal document flow,
+       below the orb section, never overlapping the header */
     .slide-inline-card {
+      position: relative !important;
+      top: auto !important;
+      left: auto !important;
+      transform: none !important;
       margin-top: 10px;
       margin-bottom: 20px;
-      transform: none !important;
+      width: 100%;
+      box-sizing: border-box;
+      z-index: 1;
+      /* Smooth fade-in so the card feels native, not jarring */
+      animation: cardSlideIn 0.25s ease-out both;
     }
+    @keyframes cardSlideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0);   }
+    }
+
     .left-col { display: none !important; }
     .pills-row { justify-content: flex-start; }
     .right-col { display: none; flex: 1; }
     body.show-project .center-col { display: none; }
     body.show-project .right-col { display: flex; }
+
+    /* center-col: allow it to grow to natural height on mobile */
+    .center-col {
+      justify-content: flex-start;
+      overflow: visible;
+    }
+    .orb-wrap {
+      flex: 0 0 auto;
+    }
 
     .mob-nav {
       display: flex;
@@ -681,16 +715,64 @@ def render_sri_zero_failure_ui(
   document.getElementById('paneCode').textContent = STATE.code;
 
   const histList = STATE.historyLog || [];
-  const histHtml = (!histList || histList.length === 0)
-    ? '<div style="color:#71717A;padding:24px;text-align:center;">No history recorded yet.</div>'
-    : histList.slice().reverse().map(item => `
-        <div style="background:#0E1117;border:1px solid #1E222B;border-left:3px solid #F59E0B;border-radius:10px;padding:10px 12px;margin-bottom:8px;">
-          <div style="font-size:10px;color:#71717A;margin-bottom:4px;">⏱️ ${item.timestamp || ''}</div>
-          <div style="font-weight:600;color:#F59E0B;font-size:12px;margin-bottom:3px;">${item.task || 'Prompt'}</div>
-          <div style="color:#E5E7EB;font-size:11.5px;line-height:1.45;">${item.details || ''}</div>
-        </div>
-      `).join('');
-  document.getElementById('paneHistory').innerHTML = histHtml;
+
+  // Type → accent colour map
+  const TYPE_COLOR = { task: '#F59E0B', chat: '#10B981', voice: '#60A5FA', research: '#A78BFA' };
+  const TYPE_ICON  = { task: '🛠️', chat: '💬', voice: '🎙️', research: '🔬' };
+
+  function buildHistoryHtml(list) {
+    if (!list || list.length === 0) {
+      return '<div style="color:#71717A;padding:24px;text-align:center;font-size:12px;">📭 No history recorded yet.</div>';
+    }
+    return list.map(item => {
+      const type  = item.type  || 'task';
+      const color = TYPE_COLOR[type] || '#F59E0B';
+      const icon  = TYPE_ICON[type]  || '📌';
+      const badge = type.toUpperCase();
+      const ts    = item.timestamp || item.iso || '';
+      const task  = (item.task    || 'Prompt').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const det   = (item.details || '').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const shortDet = det.length > 200 ? det.slice(0, 197) + '…' : det;
+      return `
+        <div style="background:#0E1117;border:1px solid #1E222B;
+            border-left:3px solid ${color};border-radius:10px;
+            padding:10px 12px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+            <span style="font-size:9px;color:${color};font-weight:700;
+                letter-spacing:0.5px;text-transform:uppercase;">${icon} ${badge}</span>
+            <span style="font-size:9px;color:#71717A;">⏱️ ${ts}</span>
+          </div>
+          <div style="font-weight:600;color:${color};font-size:12px;
+              margin-bottom:4px;line-height:1.4;">${task}</div>
+          <div style="color:#D1D5DB;font-size:11px;line-height:1.5;">${shortDet}</div>
+        </div>`;
+    }).join('');
+  }
+
+  // Render history panel (newest first — list arrives newest-first from Python)
+  document.getElementById('paneHistory').innerHTML = buildHistoryHtml(histList);
+
+  // Live client-side search inside the History pane
+  (function setupHistSearch() {
+    const pane = document.getElementById('paneHistory');
+    // Inject a search bar above the pane entries
+    const searchBar = document.createElement('div');
+    searchBar.style.cssText = 'margin-bottom:8px;';
+    searchBar.innerHTML = `
+      <input id="histSearchInput" type="text" placeholder="🔍 Search history…"
+        style="width:100%;background:#0C0E12;border:1px solid #222630;border-radius:8px;
+               padding:6px 10px;color:#FFF;font-size:11.5px;outline:none;"
+        oninput="filterHistory(this.value)">`;
+    pane.parentNode.insertBefore(searchBar, pane);
+  })();
+
+  function filterHistory(q) {
+    const lower = q.toLowerCase().trim();
+    const filtered = !lower ? histList
+      : histList.filter(e =>
+          ((e.task||'')+(e.details||'')).toLowerCase().includes(lower));
+    document.getElementById('paneHistory').innerHTML = buildHistoryHtml(filtered);
+  }
 
   const LANG_MODES = [
     { code: 'ta-IN', label: '🌐 தமிழ்' },
@@ -729,15 +811,15 @@ def render_sri_zero_failure_ui(
   }
 
   function openBackendSettings() {
+    // On mobile/desktop: switch to Project View and open the History tab
+    // so the user immediately sees the persistent history panel.
+    setMobilePage('project');
+    switchTab('history');
+    // Also try to open the Streamlit sidebar (Control Drawer) for full settings
     try {
       const parentDoc = window.parent.document;
       const btn = parentDoc.querySelector('[data-testid="collapsedControl"] button, [data-testid="collapsedControl"], [data-testid="stSidebarCollapseButton"] button');
-      if (btn) { btn.click(); return; }
-      const sidebar = parentDoc.querySelector('[data-testid="stSidebar"]');
-      if (sidebar) {
-        const isHidden = sidebar.getAttribute('aria-expanded') === 'false';
-        sidebar.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
-      }
+      if (btn) { btn.click(); }
     } catch (e) {}
   }
 
@@ -828,11 +910,13 @@ def render_sri_zero_failure_ui(
     rec.maxAlternatives = 1;
 
     isListening = true;
-    hint.textContent = autoSubmitOnFinal
-      ? 'Listening (' + LANG_MODES[langIdx].label + ')... Speak to SRI Agent'
-      : 'Dictating into chat box (' + LANG_MODES[langIdx].label + ')... Tap ➤ to send';
+    if (autoSubmitOnFinal) {
+      hint.textContent = 'Listening (' + LANG_MODES[langIdx].label + ')... Speak to SRI Agent';
+      dockCap.textContent = 'Listening... Speak your next question';
+    } else {
+      hint.textContent = 'Dictating into chat box (' + LANG_MODES[langIdx].label + ')... Tap ➤ to send';
+    }
     hint.classList.add('listening');
-    dockCap.textContent = 'Listening... Speak your next question';
     document.getElementById('waveDots').classList.add('active');
     document.getElementById('inlineMicBtn').classList.add('active');
 
@@ -876,6 +960,8 @@ def render_sri_zero_failure_ui(
       if (autoSubmitOnFinal && wasListening && val) {
         hint.textContent = 'SRI is analyzing & preparing page...';
         sendToPython(val);
+      } else if (!autoSubmitOnFinal && val) {
+        hint.textContent = 'Dictation complete. Tap ➤ Send to execute task.';
       }
     };
 
@@ -897,8 +983,8 @@ def render_sri_zero_failure_ui(
     stopAllVoiceRecognition();
     isSpeaking = true;
 
-    // Automatically open the Research / Project View page when SRI explains a topic or research result!
-    if (text.length > 65 && window.innerWidth < 900) {
+    // Automatically open the inline card in Project View on mobile
+    if (window.innerWidth < 900) {
       setMobilePage('project');
     }
 

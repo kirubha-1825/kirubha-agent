@@ -60,8 +60,11 @@ class SriUniversalVoiceRouter:
                     )
                 audio = recognizer.listen(source, timeout=5)
                 # தமிழ் மற்றும் ஆங்கிலம் இரண்டையும் புரிந்துகொள்ளும்
-                command = recognizer.recognize_google(audio, language="ta-IN")
-                return command
+                recognize_google = getattr(recognizer, "recognize_google", None)
+                if callable(recognize_google):
+                    command = recognize_google(audio, language="ta-IN")
+                    return command
+                return None
         except Exception as e:
             # If Microphone / PyAudio hardware is unavailable or timed out
             print(
