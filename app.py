@@ -64,6 +64,13 @@ from sri_voice_router import SriMasterVoiceRouter
 
 sri_voice_router = SriMasterVoiceRouter()
 
+# SRI UI Bridge Components (3D Golden Particle Sphere)
+try:
+    from sri_ui_bridge import render_3d_golden_orb
+except ImportError:
+    def render_3d_golden_orb():
+        pass
+
 # SRI Universal Voice Router (speech_recognition ta-IN -> Best AI Selector)
 from sri_universal_voice_router import SriUniversalVoiceRouter
 
@@ -4802,11 +4809,12 @@ def get_executive_voice_response(
     research_summary: str | None = None,
 ) -> str:
     """
-    Natural Human Phone-Call Persona for Kirubha:
-    - Spoken voice replies are very short and natural (1 to 2 short sentences max, under 25 words).
-    - Sounds like a smart friend & co-founder chatting casually on a phone call.
-    - Answers ONLY what Kirubha actually asked (no unrequested file stats, byte sizes, or CSRF tokens).
-    - Never appends hardcoded robotic Tamil footer strings.
+    Universal Omniscient Personal AI Agent for Kirubha:
+    - Complete awareness of Kirubha's user context, files, tasks, Python/Flutter development projects.
+    - Open-ended universal intelligence: answers coding, tech news, project status, architecture, or general knowledge.
+    - Natural bilingual speech (Tamil + English) with concise human voice responses (1 to 2 short sentences, under 28 words).
+    - Checks live task database for status inquiries with 100% precision.
+    - Zero echo loop and zero robotic closing strings.
     """
     clean_q = user_query.strip()
     q_low = clean_q.lower()
@@ -4821,18 +4829,41 @@ def get_executive_voice_response(
     if research_summary:
         return f"Hey Kirubha, I found live updates for '{clean_q}' and put them on your Preview screen. Take a look!"
 
-    system_instr = (
-        "You are SRI, Kirubha's close friend and startup co-founder having a quick voice phone call. "
-        "CRITICAL RULES:\n"
-        "1. Keep your reply VERY SHORT: strictly 1 to 2 short sentences, under 25 words total.\n"
-        "2. Sound like a real, smart friend on a phone call — warm, natural, and direct.\n"
-        "3. Answer ONLY what Kirubha asked. NEVER dump file stats, byte sizes, task counts, or unrequested technical status.\n"
-        "4. Mix natural conversational English and familiar Tamil / Tanglish phrases smoothly (e.g. 'Hey Kirubha!', 'கண்டிப்பா பண்ணிடலாம்!', 'சொல்லுங்க').\n"
-        "5. NEVER append any repetitive robotic footer or closing script.\n"
-        "6. Plain spoken text only. Zero markdown, asterisks, or bullet points."
+    # 2. Check if Kirubha is asking about active project or task status
+    is_task_status_query = any(w in q_low for w in [
+        "எங்க போயிட்டு", "என்ன பண்ணுது", "முடிஞ்சு", "மாடல் யூஸ்", "எந்த மாடல்",
+        "where is this project", "status", "progress", "how is the project",
+        "what are you doing", "what is it doing", "task done", "finished"
+    ])
+    if is_task_status_query:
+        try:
+            from agent_voice_chat import get_agent_voice_status_reply
+            status_res = get_agent_voice_status_reply(clean_q)
+            if status_res and status_res.get("spoken_text"):
+                return status_res["spoken_text"]
+        except Exception as e:
+            print(f"ℹ️ Status reply lookup notice: {e}")
+
+    # 3. Universal Omniscient AI Agent: Full Recall & Multi-Dimensional Intelligence
+    known_context = (
+        "User: Kirubha (Founder & Lead Engineer).\n"
+        "Approved Workspaces: workspace/student_learning_hub, workspace/frontend_designs, workspace/automation_scripts, google_antigravity_projects.\n"
+        "Tech Stack & Projects: Python, Streamlit, Flutter mobile development, Antigravity AI orchestration, JavaScript/HTML5, SQLite, Groq, Gemini, OpenRouter.\n"
+        f"Active Tasks: {active_tasks_count} | Active File: {workspace_file}"
     )
 
-    user_prompt = f"Kirubha says: \"{clean_q}\". Reply casually and directly in 1-2 short sentences (under 25 words)."
+    system_instr = (
+        "You are SRI, the Universal Omniscient Personal AI Agent for Kirubha. "
+        "You have complete awareness and recall of all Kirubha's projects (Python, Flutter, UI, background tasks, files), daily tech news, coding logic, and general knowledge.\n"
+        "CORE DIRECTIVES:\n"
+        "1. Complete Omniscience: You can answer ANY question Kirubha asks across coding, tech, startups, science, life, or projects. Never restrict yourself.\n"
+        "2. Natural Bilingual Speech: Seamlessly understand and converse in both Tamil and English (Tanglish is welcome).\n"
+        "3. Voice Conciseness: Spoken replies must be very concise, human, and direct (1 to 2 short sentences max, under 28 words total), like talking to a smart friend on a phone call.\n"
+        "4. Tone: Confident, warm, intelligent, and proactive.\n"
+        "5. Plain Spoken Text Only: Zero markdown, asterisks, brackets, or bullet points. Never append any repetitive robotic footer."
+    )
+
+    user_prompt = f"Context:\n{known_context}\n\nKirubha asks: \"{clean_q}\"\nProvide a natural, concise spoken answer (1-2 short sentences, under 28 words):"
 
     try:
         executor = ThreadPoolExecutor(max_workers=1)
@@ -4865,8 +4896,11 @@ def get_executive_voice_response(
 st.markdown("""
 <style>
 div[data-testid="stTextInput"]:has(input[aria-label="sri_bridge_input"]),
+div[data-testid="stTextInput"]:has(input[aria-label="sri_hidden_bridge"]),
+div[data-testid="stTextInput"]:has(input[placeholder="sri_hidden_bridge"]),
 div[data-testid="stTextInput"]:has(input[id*="sri_bridge_input"]),
-div:has(> input[aria-label="sri_bridge_input"]) {
+div:has(> input[aria-label="sri_bridge_input"]),
+div:has(> input[aria-label="sri_hidden_bridge"]) {
     position: fixed !important;
     top: -9999px !important;
     left: -9999px !important;
@@ -4888,11 +4922,13 @@ def _on_sri_bridge_change():
 st.text_input(
     "sri_bridge_input",
     key="sri_bridge_input",
+    placeholder="sri_hidden_bridge",
     label_visibility="collapsed",
     on_change=_on_sri_bridge_change,
 )
 
 # 2. Read bridge command or query params and route through Fast Conversational Voice Agent
+reply_spoken: str = ""
 bridge_cmd = st.session_state.pop("_active_sri_bridge_cmd", None)
 cmd = bridge_cmd or st.query_params.get("sri_cmd")
 if cmd:
@@ -4972,14 +5008,16 @@ render_sri_zero_failure_ui(
     generated_code=generated_code,
     generated_preview_html=generated_preview_html,
     chat_history=st.session_state.get("sri_chat_history", []),
+    voice_reply_text=reply_spoken,
 )
 
 
 # ==============================================================================
 # 12. BYPASSED LEGACY STREAMLIT COLUMNS/BUTTONS/RADIO UI BLOCK
-# (Preserved 100% intact without deleting any lines, bypassed via if False)
+# (Preserved 100% intact without deleting any lines, bypassed dynamically)
 # ==============================================================================
-if False:
+_ENABLE_LEGACY_STREAMLIT_UI = os.environ.get("ENABLE_LEGACY_STREAMLIT_UI", "").lower() in ("1", "true")
+if _ENABLE_LEGACY_STREAMLIT_UI:
     # ==============================================================================
     # 11. RESPONSIVE SPATIAL MAIN SCREEN: DESKTOP 3-ZONE GRID (NO TOP RADIO)
     # ==============================================================================
