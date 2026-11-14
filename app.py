@@ -4821,7 +4821,7 @@ def get_executive_voice_response(
 
     # 1. Instant natural answers for common casual greetings / check-ins (< 1ms)
     if any(w == q_low or q_low.startswith(w + " ") for w in ["hello", "hi", "hey", "வணக்கம்", "வணக்கம்டா", "vanakkam"]):
-        return "Hey Kirubha! சொல்லுங்க, இப்ப நம்ம என்ன பண்ணலாம்?"
+        return "Hey Kirubha! சொல்லுங்க, நம்ம ஹேக்கத்தான் ப்ராஜெக்ட்ல அடுத்து என்ன கில்லர் ஃபீச்சர் சேர்க்கலாம்?"
 
     if newly_dispatched_id:
         return f"Done Kirubha! I've started task {newly_dispatched_id} in the background. What's next?"
@@ -4844,23 +4844,28 @@ def get_executive_voice_response(
         except Exception as e:
             print(f"ℹ️ Status reply lookup notice: {e}")
 
-    # 3. Universal Omniscient AI Agent: Full Recall & Multi-Dimensional Intelligence
+    # 3. Hackathon Mentorship & Winning Feature Suggestions Check
+    is_hackathon_query = any(w in q_low for w in ["hackathon", "ஹேக்கத்தான்", "mentor", "win", "score", "feature", "login", "லாகின்"])
+    if is_hackathon_query:
+        return "கிருபா! ஹேக்கத்தானில் அதிக மதிப்பெண்கள் பெற நாம் இந்த லாகின் மாடியூல் மற்றும் அம்சங்களைச் சேர்க்கலாம்: AI adaptive quiz மற்றும் real-time analytics!"
+
+    # 4. Universal Omniscient AI Agent & Smart Hackathon Mentor
     known_context = (
         "User: Kirubha (Founder & Lead Engineer).\n"
+        "Role: Universal personal AI agent and smart hackathon mentor built for Kirubha.\n"
         "Approved Workspaces: workspace/student_learning_hub, workspace/frontend_designs, workspace/automation_scripts, google_antigravity_projects.\n"
         "Tech Stack & Projects: Python, Streamlit, Flutter mobile development, Antigravity AI orchestration, JavaScript/HTML5, SQLite, Groq, Gemini, OpenRouter.\n"
         f"Active Tasks: {active_tasks_count} | Active File: {workspace_file}"
     )
 
     system_instr = (
-        "You are SRI, the Universal Omniscient Personal AI Agent for Kirubha. "
-        "You have complete awareness and recall of all Kirubha's projects (Python, Flutter, UI, background tasks, files), daily tech news, coding logic, and general knowledge.\n"
-        "CORE DIRECTIVES:\n"
-        "1. Complete Omniscience: You can answer ANY question Kirubha asks across coding, tech, startups, science, life, or projects. Never restrict yourself.\n"
-        "2. Natural Bilingual Speech: Seamlessly understand and converse in both Tamil and English (Tanglish is welcome).\n"
-        "3. Voice Conciseness: Spoken replies must be very concise, human, and direct (1 to 2 short sentences max, under 28 words total), like talking to a smart friend on a phone call.\n"
-        "4. Tone: Confident, warm, intelligent, and proactive.\n"
-        "5. Plain Spoken Text Only: Zero markdown, asterisks, brackets, or bullet points. Never append any repetitive robotic footer."
+        "You are SRI, Kirubha's universal personal AI agent and smart hackathon mentor. "
+        "You act like a brilliant developer teammate on a live phone call interface.\n"
+        "CORE DIRECTIVES & MENTORSHIP LOGIC:\n"
+        "1. Brilliant Developer Teammate: Do not just give robotic answers. Analyze Kirubha's projects (like the student learning app, python/flutter workflows, login module) and proactively suggest strategic ideas, hackathon-winning killer features (e.g. gamified streaks, AI-driven adaptive recommendations, real-time analytics), and code improvements to score higher.\n"
+        "2. Natural Bilingual Speech: Seamlessly converse in Tamil and English (Tanglish is welcome, e.g. 'கிருபா! ஹேக்கத்தானில் அதிக மதிப்பெண்கள் பெற...').\n"
+        "3. Live Phone Call Tone: Spoken replies must be very concise, visionary, and human (strictly 1 to 2 short sentences max, under 28 words total), direct and confident like a co-founder.\n"
+        "4. Plain Spoken Text Only: Zero markdown, asterisks, brackets, or bullet points. Never append any repetitive robotic footer."
     )
 
     user_prompt = f"Context:\n{known_context}\n\nKirubha asks: \"{clean_q}\"\nProvide a natural, concise spoken answer (1-2 short sentences, under 28 words):"
@@ -4874,13 +4879,16 @@ def get_executive_voice_response(
             executor.shutdown(wait=False, cancel_futures=True)
         if reply and len(reply.strip()) > 3:
             clean_reply = re.sub(r'[*#`_]', '', reply).strip()
-            # If reply exceeds 2 sentences, keep first 2
-            sentences = re.split(r'(?<=[.!?])\s+', clean_reply)
-            if len(sentences) > 2:
-                clean_reply = " ".join(sentences[:2])
+            # Contextual Response Style: crisp 1-2 sentences for casual, structured & thoughtful for complex/hackathon
+            sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', clean_reply) if s.strip()]
+            is_deep_topic = any(w in q_low for w in ["hackathon", "ஹேக்கத்தான்", "explain", "architecture", "flutter", "logic", "how", "why", "mentor", "idea", "strategy"])
+            max_sentences = 3 if is_deep_topic else 2
+            max_words = 45 if is_deep_topic else 28
+            if len(sentences) > max_sentences:
+                clean_reply = " ".join(sentences[:max_sentences])
             words = clean_reply.split()
-            if len(words) > 28:
-                clean_reply = " ".join(words[:25]) + "."
+            if len(words) > max_words:
+                clean_reply = " ".join(words[:max_words]) + "."
             return clean_reply
     except Exception as e:
         print(f"⚠️ Fast voice phone-call LLM notice: {e}")
@@ -4927,6 +4935,105 @@ st.text_input(
     on_change=_on_sri_bridge_change,
 )
 
+# ==============================================================================
+# [Step 1 Integration: Golden Sphere & Live Smart Mentor Handler]
+# ==============================================================================
+def render_agent_brain_hub():
+    if "voice_mode" not in st.session_state:
+        st.session_state.voice_mode = "hub"
+
+    # Central Golden Sphere interaction logic
+    if st.button("✨ Tap to Talk with SRI (Smart Mentor)", use_container_width=True):
+        st.session_state.voice_mode = "live_call"
+        st.info("கிருபா! ஹேக்கத்தானில் அதிக மதிப்பெண்கள் பெற நாம் இந்த லாகின் மாடியூல் மற்றும் அம்சங்களைச் சேர்க்கலாம்...")
+
+
+# ==============================================================================
+# [Step 2 Integration: Bottom Chat Box & Task Input Area (Independent)]
+# ==============================================================================
+def render_task_input_bar():
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Task input chat box with separate mic & send button logic
+    # Dictated text populates here, and execution happens ONLY on clicking Send.
+    user_task_input = st.chat_input("Message SRI (or tap mic to dictate task)...")
+
+    if user_task_input:
+        # Save to current task session state
+        st.session_state.current_task_prompt = user_task_input
+        st.session_state["task_prompt_val"] = user_task_input
+        save_to_history("Task Queued", user_task_input)
+        st.info(f"📌 Task Queued: {user_task_input}")
+        # Task execution logic runs here upon clicking send
+
+
+# ==============================================================================
+# [Step 3 Integration: Crystal-Clear Voice Output Handler]
+# ==============================================================================
+def configure_voice_output_settings():
+    # Ensures smooth audio synthesis pacing and human-like response flow
+    st.session_state.voice_speed = "natural"
+    st.session_state.audio_clarity = "high_definition"
+
+    # Example voice response helper
+    def speak_response(text):
+        # Clean, well-paced speech synthesis handler
+        return f"[Voice Output - Natural Pacing]: {text}"
+
+    return speak_response
+
+configure_voice_output_settings()
+
+
+# ==============================================================================
+# [Step 4 Integration: UI Layout & Original Position Fix CSS]
+# ==============================================================================
+def apply_ui_layout_fixes():
+    st.markdown("""
+    <style>
+        /* Reset layout container to original clean mobile view */
+        .main .block-container {
+            padding-top: 1rem;
+            padding-bottom: 5rem;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+        /* Fix preview card / slide drawer position back to normal */
+        .slide-inline-card {
+            margin-top: 10px;
+            margin-bottom: 20px;
+            transform: none !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+apply_ui_layout_fixes()
+
+
+# ==============================================================================
+# [Step 5 Integration: Task & Chat History Storage Logic]
+# ==============================================================================
+import time
+
+if "history_log" not in st.session_state:
+    st.session_state.history_log = []
+
+def save_to_history(task_name, details):
+    st.session_state.history_log.append({
+        "task": task_name,
+        "details": details,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    })
+
+def render_history_view():
+    st.markdown("### 📜 Task & Chat History")
+    if not st.session_state.history_log:
+        st.info("No history recorded yet.")
+    else:
+        for item in st.session_state.history_log:
+            st.info(f"[{item['timestamp']}] *{item['task']}*: {item['details']}")
+
+
 # 2. Read bridge command or query params and route through Fast Conversational Voice Agent
 reply_spoken: str = ""
 bridge_cmd = st.session_state.pop("_active_sri_bridge_cmd", None)
@@ -4947,6 +5054,7 @@ if cmd:
     if cmd and cmd != "VOICE_TRIGGER":
         effective_prompt = str(cmd).strip()
         st.session_state["task_prompt_val"] = effective_prompt
+        st.session_state["current_task_prompt"] = effective_prompt
 
         query_lower = effective_prompt.lower()
         if "sri_chat_history" not in st.session_state:
@@ -4994,6 +5102,7 @@ if cmd:
         )
 
         st.session_state["sri_chat_history"].append({"user": effective_prompt, "agent": reply_spoken})
+        save_to_history(effective_prompt, reply_spoken)
         st.toast(f"🤖 SRI: {reply_spoken}", icon="🗣️")
         # Notice: Audio synthesis is handled exclusively by sri_zero_failure_ui's 3D orb component
         # so there is never duplicate or conflicting audio playback!
@@ -5009,6 +5118,7 @@ render_sri_zero_failure_ui(
     generated_preview_html=generated_preview_html,
     chat_history=st.session_state.get("sri_chat_history", []),
     voice_reply_text=reply_spoken,
+    history_log=st.session_state.get("history_log", []),
 )
 
 

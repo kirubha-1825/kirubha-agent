@@ -131,6 +131,7 @@ def render_sri_zero_failure_ui(
     generated_preview_html="",
     chat_history=None,
     voice_reply_text="",
+    history_log=None,
     **kwargs,
 ):
     if chat_history is None:
@@ -208,6 +209,7 @@ def render_sri_zero_failure_ui(
             "shouldSpeak": should_speak,
             "spokenText": cleaned_reply,
             "audioBase64": audio_b64,
+            "historyLog": history_log or st.session_state.get("history_log", []),
         }
     )
 
@@ -546,6 +548,14 @@ def render_sri_zero_failure_ui(
       display: flex;
       flex-direction: column;
       padding: 2px 16px 4px 16px;
+      max-width: 480px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    .slide-inline-card {
+      margin-top: 10px;
+      margin-bottom: 20px;
+      transform: none !important;
     }
     .left-col { display: none !important; }
     .pills-row { justify-content: flex-start; }
@@ -626,7 +636,7 @@ def render_sri_zero_failure_ui(
           <button class="pill-btn" onclick="sendToPython('Refine login.html')">Refine login.html</button>
         </div>
         <div class="chat-bar">
-          <input id="promptInput" type="text" placeholder="Message SRI (or tap mic to dictate)..." onkeydown="if(event.key==='Enter') submitPrompt()">
+          <input id="promptInput" type="text" placeholder="Message SRI (or tap mic to dictate task)..." onkeydown="if(event.key==='Enter') submitPrompt()">
           <div class="wave-dots" id="waveDots"><span></span><span></span><span></span><span></span><span></span></div>
           <button class="mic-inline" id="inlineMicBtn" onclick="startInlineDictation()" title="Voice to Text (Wait for Send)">🎙️</button>
           <button class="send-circle" onclick="submitPrompt()" title="Send Task">➤</button>
@@ -638,10 +648,12 @@ def render_sri_zero_failure_ui(
       <div class="seg-tabs">
         <div class="seg-tab active" id="tabPreview" onclick="switchTab('preview')">Research & Preview</div>
         <div class="seg-tab" id="tabCode" onclick="switchTab('code')">Code</div>
+        <div class="seg-tab" id="tabHistory" onclick="switchTab('history')">History</div>
       </div>
       <div style="font-size:11px;color:#71717A;margin-bottom:8px;font-family:'JetBrains Mono',monospace;" id="fileLabel">workspace/login.html</div>
       <div class="workspace-pane" id="panePreview"></div>
       <pre class="workspace-pane" id="paneCode" style="display:none;white-space:pre-wrap;"></pre>
+      <div class="workspace-pane" id="paneHistory" style="display:none;overflow-y:auto;"></div>
 
       <!-- Bottom Round Floating Voice Orb on Research/Project Page -->
       <div class="floating-voice-dock" onclick="handleOrbTap()">
@@ -668,6 +680,18 @@ def render_sri_zero_failure_ui(
   document.getElementById('panePreview').innerHTML = STATE.previewHtml;
   document.getElementById('paneCode').textContent = STATE.code;
 
+  const histList = STATE.historyLog || [];
+  const histHtml = (!histList || histList.length === 0)
+    ? '<div style="color:#71717A;padding:24px;text-align:center;">No history recorded yet.</div>'
+    : histList.slice().reverse().map(item => `
+        <div style="background:#0E1117;border:1px solid #1E222B;border-left:3px solid #F59E0B;border-radius:10px;padding:10px 12px;margin-bottom:8px;">
+          <div style="font-size:10px;color:#71717A;margin-bottom:4px;">⏱️ ${item.timestamp || ''}</div>
+          <div style="font-weight:600;color:#F59E0B;font-size:12px;margin-bottom:3px;">${item.task || 'Prompt'}</div>
+          <div style="color:#E5E7EB;font-size:11.5px;line-height:1.45;">${item.details || ''}</div>
+        </div>
+      `).join('');
+  document.getElementById('paneHistory').innerHTML = histHtml;
+
   const LANG_MODES = [
     { code: 'ta-IN', label: '🌐 தமிழ்' },
     { code: 'en-IN', label: '🌐 English' },
@@ -691,8 +715,10 @@ def render_sri_zero_failure_ui(
   function switchTab(mode) {
     document.getElementById('tabPreview').classList.toggle('active', mode === 'preview');
     document.getElementById('tabCode').classList.toggle('active', mode === 'code');
+    document.getElementById('tabHistory').classList.toggle('active', mode === 'history');
     document.getElementById('panePreview').style.display = mode === 'preview' ? 'block' : 'none';
     document.getElementById('paneCode').style.display = mode === 'code' ? 'block' : 'none';
+    document.getElementById('paneHistory').style.display = mode === 'history' ? 'block' : 'none';
   }
 
   function setMobilePage(page) {
