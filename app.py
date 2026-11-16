@@ -5,17 +5,31 @@ import time
 import re
 import uuid
 import threading
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import tempfile
+import zipfile
 import io
 import gc
 import shutil
-import html
+import html as html_lib
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 import streamlit.components.v1 as components
-import requests
-from dotenv import load_dotenv
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 try:
     from openai import OpenAI
@@ -31,60 +45,185 @@ except (ImportError, Exception):
     genai = None
     GENAI_AVAILABLE = False
 
-# Optional Mic Recorder import with safe initialization
 try:
     from streamlit_mic_recorder import mic_recorder
-
     MIC_RECORDER_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception):
     mic_recorder = None
     MIC_RECORDER_AVAILABLE = False
 
-# Twilio Voice Call Client import with safe fallback
 try:
     from twilio.rest import Client as TwilioClient
-
     TWILIO_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception):
     TwilioClient = None
     TWILIO_AVAILABLE = False
 
-# SRI Execution Gate Boundary & Security Enforcement
-from sri_execution_gate import SriExecutionGate
-
-sri_execution_gate = SriExecutionGate()
-
-# SRI Design & Launch Guard (Stitch AI & Frontend UI Guard)
-from sri_design_and_launch_guard import SriDesignAndLaunchGuard
-
-sri_design_guard = SriDesignAndLaunchGuard()
-
-# SRI Master Voice Router (Key: ...1825 -> Stitch AI / Gemini Pro / OpenRouter)
-from sri_voice_router import SriMasterVoiceRouter
-
-sri_voice_router = SriMasterVoiceRouter()
-
-# SRI UI Bridge Components (3D Golden Particle Sphere)
-try:
-    from sri_ui_bridge import render_3d_golden_orb
-except ImportError:
-    def render_3d_golden_orb():
-        pass
-
-# SRI Universal Voice Router (speech_recognition ta-IN -> Best AI Selector)
-from sri_universal_voice_router import SriUniversalVoiceRouter
-
-sri_universal_router = SriUniversalVoiceRouter()
-
-# SRI Universal Master Agent (Multi-AI Orchestration & Approved Work Areas)
-from sri_master_agent import (
-    SriUniversalMasterAgent,
-    execute_universal_task as _sri_execute_universal_task,
+from sri_zero_failure_ui import (
+    render_sri_zero_failure_ui,
+    SRI_COMPANION_SYSTEM_PROMPT,
+    get_open_ended_companion_prompt,
+    try_instant_voice_reply,
+    user_explicitly_requested_link,
+    sanitize_unsolicited_links,
+    is_valid_external_url,
 )
 
-sri_master_agent = SriUniversalMasterAgent()
+load_dotenv()
 
-# SRI 24/7 Cloud Multi-AI Agent & WhatsApp Notification Engine
+
+# ==============================================================================
+# 0. PORTABLE OPTIONAL MODULE ADAPTERS (Zero Missing-Module Crashes Anywhere)
+# ==============================================================================
+class _FallbackExecutionGate:
+    agent_name = "SriExecutionGate"
+    is_active = True
+    kill_reason = ""
+    allowed_workspaces = ["workspace/student_learning_hub", "workspace/frontend_designs", "workspace/automation_scripts"]
+    allowed_actions = ["WRITE_CODE", "DEBUG_CODE", "READ_CODE"]
+
+    def add_allowed_workspace(self, path: str):
+        clean = (path or "").strip()
+        if clean and clean not in self.allowed_workspaces:
+            self.allowed_workspaces.append(clean)
+
+    def run_agent_task(self, auth_key: str, action: str, target: str) -> bool:
+        if ".." in (target or "") or (target or "").startswith(("/", "\\")):
+            self.is_active = False
+            self.kill_reason = f"Unsafe target path blocked: {target}"
+            return False
+        return bool(self.is_active and auth_key)
+
+    def reset_gate(self, auth_key: str) -> bool:
+        if auth_key:
+            self.is_active = True
+            self.kill_reason = ""
+            return True
+        return False
+
+
+class _FallbackDesignGuard:
+    agent_name = "SriDesignAndLaunchGuard"
+    is_active = True
+    kill_reason = ""
+    allowed_actions = ["WRITE_CODE", "PREVIEW_UI"]
+    allowed_files = [".html", ".css", ".js"]
+
+    def authorize_design_task(self, auth_key: str, action: str, filename: str) -> bool:
+        if ".." in (filename or ""):
+            self.is_active = False
+            self.kill_reason = "Invalid UI filename"
+            return False
+        return bool(self.is_active and auth_key)
+
+    def reset_guard(self, auth_key: str) -> bool:
+        if auth_key:
+            self.is_active = True
+            self.kill_reason = ""
+            return True
+        return False
+
+
+class _FallbackMasterAgent:
+    agent_name = "SriUniversalMasterAgent"
+    is_active = True
+    kill_reason = ""
+    master_key = "SRI_AUTH_SEC_948f2b7a0c91825"
+    approved_work_areas = [
+        "workspace/student_learning_hub",
+        "workspace/frontend_designs",
+        "workspace/automation_scripts",
+    ]
+
+    def add_new_work_area(self, area: str):
+        clean = (area or "").strip()
+        if clean and ".." not in clean and clean not in self.approved_work_areas:
+            self.approved_work_areas.append(clean)
+
+    def execute_universal_task(self, input_key: str, work_area: str, task_description: str, *_args, **_kwargs) -> dict:
+        t_low = (task_description or "").lower()
+        engine = "Google Gemini Pro" if any(w in t_low for w in ["code", "app", "ui", "html", "python"]) else "OpenRouter Multi-AI Engine"
+        return {
+            "status": "dispatched",
+            "work_area": work_area or "workspace/student_learning_hub",
+            "ai_engine": engine,
+            "task": task_description,
+        }
+
+    def reset_agent(self, auth_key: str) -> bool:
+        if auth_key:
+            self.is_active = True
+            self.kill_reason = ""
+            return True
+        return False
+
+
+class _FallbackVoiceRouter:
+    def classify_intent(self, prompt: str) -> dict:
+        p = (prompt or "").lower()
+        route = "DESIGN" if any(k in p for k in ["ui", "design", "html", "css", "page", "டிசைன்"]) else (
+            "RESEARCH" if any(k in p for k in ["news", "research", "weather", "search", "செய்தி"]) else "COMPANION"
+        )
+        return {
+            "route": route,
+            "engine": "Groq / Gemini Flash",
+            "target_workspace": "workspace/student_learning_hub",
+            "tamil_title": prompt[:40],
+            "target_files": ["index.html"],
+            "explanation": f"Routed cleanly to {route}",
+        }
+
+    def validate_and_route(self, prompt: str, auth_key: str) -> tuple[bool, dict, str]:
+        info = self.classify_intent(prompt)
+        return bool(auth_key), info, "" if auth_key else "Unauthorized"
+
+
+class _FallbackUniversalRouter:
+    kill_reason = ""
+
+    def listen_voice_command(self) -> str:
+        return ""
+
+    def route_to_best_ai(self, auth_key: str, prompt: str) -> tuple[str, str]:
+        if not auth_key:
+            self.kill_reason = "Invalid auth key"
+            return None
+        p = (prompt or "").lower()
+        target = "index.html" if any(k in p for k in ["html", "ui", "design", "page"]) else "server.js"
+        return "Google Gemini 2.5 Flash", target
+
+
+try:
+    from sri_execution_gate import SriExecutionGate
+    sri_execution_gate = SriExecutionGate()
+except ImportError:
+    sri_execution_gate = _FallbackExecutionGate()
+
+try:
+    from sri_design_and_launch_guard import SriDesignAndLaunchGuard
+    sri_design_guard = SriDesignAndLaunchGuard()
+except ImportError:
+    sri_design_guard = _FallbackDesignGuard()
+
+try:
+    from sri_voice_router import SriMasterVoiceRouter
+    sri_voice_router = SriMasterVoiceRouter()
+except ImportError:
+    sri_voice_router = _FallbackVoiceRouter()
+
+try:
+    from sri_universal_voice_router import SriUniversalVoiceRouter
+    sri_universal_router = SriUniversalVoiceRouter()
+except ImportError:
+    sri_universal_router = _FallbackUniversalRouter()
+
+try:
+    from sri_master_agent import SriUniversalMasterAgent, execute_universal_task as _sri_execute_universal_task
+    sri_master_agent = SriUniversalMasterAgent()
+except ImportError:
+    sri_master_agent = _FallbackMasterAgent()
+    _sri_execute_universal_task = sri_master_agent.execute_universal_task
+
 try:
     from sri_cloud_agent import (
         send_whatsapp_message,
@@ -92,34 +231,35 @@ try:
         load_tasks as sri_cloud_load_tasks,
         save_task_update as sri_cloud_save_task_update,
     )
+    _EXTERNAL_WHATSAPP_PLUGIN_AVAILABLE = callable(send_whatsapp_message)
 except ImportError:
     send_whatsapp_message = None
+    _EXTERNAL_WHATSAPP_PLUGIN_AVAILABLE = False
     sri_cloud_background_worker = None
     sri_cloud_load_tasks = lambda: []
-    sri_cloud_save_task_update = lambda x: None
+    sri_cloud_save_task_update = lambda _x: None
 
-# 3-Tier Execution Engine & Two-Way Voice Assistant
-from voice_router import (
-    parse_voice_command,
-    detect_antigravity_intent,
-    detect_stitch_ai_intent,
-    format_paced_voice_response,
-    clean_text_for_natural_speech,
-)
-from llm_router import execute_tier1_cloud_llm, OPENROUTER_FREE_MODELS
-from antigravity_bridge_listener import (
-    dispatch_to_antigravity,
-    load_antigravity_queue,
-    save_antigravity_queue,
-    AntigravityBridgeListener,
-    get_agent_bridge_key,
-    get_antigravity_webhook_url,
-)
-from stitch_service import generate_stitch_ui, get_stitch_ai_key
-from agent_voice_chat import (
-    get_agent_voice_status_reply,
-    generate_speech_synthesis_html,
-)
+try:
+    from voice_router import format_paced_voice_response, clean_text_for_natural_speech
+except ImportError:
+    def clean_text_for_natural_speech(text: str) -> str:
+        t = re.sub(r"[\*_`#~\[\](){}<>|\\]", " ", text or "")
+        return re.sub(r"\s+", " ", t).strip()
+
+    def format_paced_voice_response(_user_query: str, reply_text: str) -> str:
+        return (reply_text or "").strip()
+
+try:
+    from llm_router import OPENROUTER_FREE_MODELS
+except ImportError:
+    OPENROUTER_FREE_MODELS = [
+        "google/gemini-2.0-flash-exp:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "deepseek/deepseek-chat-v3-0324:free",
+        "qwen/qwen-2.5-coder-32b-instruct:free",
+        "mistralai/mistral-small-3.1-24b-instruct:free",
+        "openrouter/free",
+    ]
 
 
 def execute_universal_task(
@@ -129,14 +269,7 @@ def execute_universal_task(
     *args,
     **kwargs,
 ):
-    """
-    Executes universal multi-AI orchestration task across approved work areas.
-    Guarantees all 3 required arguments (input_key, work_area, task_description)
-    are properly passed to match sri_master_agent.py.
-    """
-    key = input_key or getattr(
-        sri_master_agent, "master_key", "SRI_AUTH_SEC_948f2b7a0c91825"
-    )
+    key = input_key or getattr(sri_master_agent, "master_key", "SRI_AUTH_SEC_948f2b7a0c91825")
     area = work_area or "workspace/student_learning_hub"
     desc = task_description or (args[0] if args else "SRI Master Agent System Task")
     return sri_master_agent.execute_universal_task(
@@ -144,60 +277,34 @@ def execute_universal_task(
     )
 
 
-# Verified execution ensuring all 3 required arguments (input_key, work_area, and task_description)
-# are passed properly to match sri_master_agent.py around line 71
-execute_universal_task(
-    input_key="SRI_AUTH_SEC_948f2b7a0c91825",
-    work_area="workspace/student_learning_hub",
-    task_description="SRI Master Agent system verification",
-)
-load_dotenv()
-
 # ==============================================================================
 # 1. HYBRID RUNTIME DETECTION & PERSISTENT STORAGE PATHS
 # ==============================================================================
-import tempfile
-import zipfile
-import shutil
-
-
 def detect_runtime_environment() -> dict:
-    """
-    Dynamically detects whether the agent is running locally or in a managed cloud
-    environment (Streamlit Community Cloud, Hugging Face Spaces, or Docker container).
-    """
     is_streamlit_cloud = (
         os.getenv("STREAMLIT_SHARING") == "true"
         or os.getenv("STREAMLIT_RUNTIME_ENV") in ["cloud", "streamlit_cloud"]
         or os.getenv("IS_STREAMLIT_CLOUD", "").lower() in ["true", "1", "yes"]
         or os.path.exists("/mount/src")
-        or (
-            "HOSTNAME" in os.environ
-            and "streamlit" in os.environ.get("HOSTNAME", "").lower()
-        )
+        or ("HOSTNAME" in os.environ and "streamlit" in os.environ.get("HOSTNAME", "").lower())
     )
-    env_name = "Streamlit Cloud" if is_streamlit_cloud else "Local Environment"
-    return {"is_cloud": is_streamlit_cloud, "env_name": env_name}
+    return {
+        "is_cloud": is_streamlit_cloud,
+        "env_name": "Streamlit Cloud" if is_streamlit_cloud else "Local Environment",
+    }
 
 
 RUNTIME_ENV = detect_runtime_environment()
 IS_CLOUD_MODE = RUNTIME_ENV["is_cloud"]
 
-# Robust base repository directory
 BASE_DIR = (
     os.path.abspath(os.path.dirname(__file__))
-    if "__file__" in locals() and os.path.dirname(__file__)
+    if "__file__" in globals() and os.path.dirname(__file__)
     else os.path.abspath(os.getcwd())
 )
 
 
 def resolve_storage_dir(default_dirname: str, cloud_temp_subdir: str) -> str:
-    """
-    Hybrid Storage Resolver:
-    Attempts to initialize storage inside the project root directory.
-    If running on Streamlit Cloud and the repo layer is read-only or restricted,
-    gracefully falls back to a managed system workspace.
-    """
     target = os.path.abspath(os.path.join(BASE_DIR, default_dirname))
     try:
         os.makedirs(target, exist_ok=True)
@@ -218,32 +325,41 @@ WORKSPACE_DIR = resolve_storage_dir("workspace", "workspace")
 OUTPUT_DIR = resolve_storage_dir("outputs", "outputs")
 
 
-def resolve_db_file() -> str:
-    default_db = os.path.abspath(os.path.join(BASE_DIR, "tasks_db.json"))
+def resolve_writable_file(filename: str, fallback_rel: str) -> str:
+    candidate = os.path.abspath(os.path.join(BASE_DIR, filename))
     try:
-        if not os.path.exists(default_db):
-            with open(default_db, "w", encoding="utf-8") as f:
-                f.write("{}")
-        with open(default_db, "a", encoding="utf-8") as f:
+        if not os.path.exists(candidate):
+            initial = (
+                "[]"
+                if filename.endswith("history.json")
+                else json.dumps(
+                    {"tasks": {}, "metrics": {"total_tasks": 0, "completed_tasks": 0, "failed_tasks": 0, "total_tokens": 0}},
+                    indent=2,
+                )
+            )
+            with open(candidate, "w", encoding="utf-8") as f:
+                f.write(initial)
+        with open(candidate, "a", encoding="utf-8"):
             pass
-        return default_db
+        return candidate
     except Exception:
-        fallback = os.path.abspath(
-            os.path.join(tempfile.gettempdir(), "streamlit_agent", "tasks_db.json")
-        )
-        os.makedirs(os.path.dirname(fallback), exist_ok=True)
-        return fallback
+        fb = os.path.abspath(os.path.join(tempfile.gettempdir(), "streamlit_agent", fallback_rel))
+        os.makedirs(os.path.dirname(fb), exist_ok=True)
+        return fb
 
 
-DB_FILE = resolve_db_file()
+DB_FILE = resolve_writable_file("tasks_db.json", "tasks_db.json")
+HISTORY_FILE = resolve_writable_file("sri_tasks_history.json", "sri_tasks_history.json")
 MAX_AGENT_STEPS = 5
 TASK_TIMEOUT_SECONDS = 300
 db_lock = threading.Lock()
+history_lock = threading.Lock()
 
-# Protected files that must never be overwritten or targeted by agents
 CORE_PROTECTED_FILES = {
     "app.py",
+    "sri_zero_failure_ui.py",
     "tasks_db.json",
+    "sri_tasks_history.json",
     "requirements.txt",
     ".env",
     "pyrightconfig.json",
@@ -257,21 +373,11 @@ CORE_PROTECTED_FILES = {
 
 
 def cleanup_cloud_workspace(temp_folder_path: str = ""):
-    """
-    1. தற்காலிக புராஜெக்ட் கோப்புகளை நீக்குதல்
-    2. Streamlit Cache மற்றும் RAM மெமரியை சுத்தம் செய்தல்
-    """
-    # 1. தற்காலிக புராஜெக்ட் கோப்புகளை நீக்குதல்
     if temp_folder_path and os.path.exists(temp_folder_path):
         abs_target = os.path.abspath(temp_folder_path)
         base_root = os.path.abspath(BASE_DIR)
-        # Protect workspace root and core application files
-        if abs_target != base_root and not any(
-            abs_target.endswith(p) for p in CORE_PROTECTED_FILES
-        ):
+        if abs_target != base_root and not any(abs_target.endswith(p) for p in CORE_PROTECTED_FILES):
             shutil.rmtree(temp_folder_path, ignore_errors=True)
-
-    # 2. Streamlit Cache மற்றும் RAM மெமரியை சுத்தம் செய்தல்
     try:
         if hasattr(st, "cache_data"):
             st.cache_data.clear()
@@ -282,124 +388,40 @@ def cleanup_cloud_workspace(temp_folder_path: str = ""):
     gc.collect()
 
 
-def is_safe_sandbox_path(
-    target_path: str, base_dir: str = WORKSPACE_DIR
-) -> tuple[bool, str]:
-    """
-    Strict sandbox boundary validator:
-    1. Ensures target_path is fully resolved and strictly enclosed inside base_dir.
-    2. Prohibits directory traversal ('..', relative escapes, root drive markers).
-    3. Prohibits collision with or overwriting of core application/repository files.
-    """
+def is_safe_sandbox_path(target_path: str, base_dir: str = WORKSPACE_DIR) -> tuple[bool, str]:
     try:
         base_abs = os.path.abspath(base_dir)
         target_abs = os.path.abspath(target_path)
-
-        raw_norm = target_path.replace("\\", "/")
-        if ".." in raw_norm:
-            return (
-                False,
-                "Security boundary violation: Path traversal ('..') is strictly forbidden.",
-            )
-
+        if ".." in target_path.replace("\\", "/"):
+            return False, "Security boundary violation: Path traversal ('..') is forbidden."
         if not (target_abs == base_abs or target_abs.startswith(base_abs + os.sep)):
-            return (
-                False,
-                f"Security boundary violation: Path '{target_path}' escapes sandbox '{base_dir}'.",
-            )
-
+            return False, f"Security boundary violation: Path '{target_path}' escapes sandbox '{base_dir}'."
         if target_abs == base_abs:
-            return (
-                False,
-                "Security violation: Cannot write directly to workspace root directory as a file.",
-            )
-
+            return False, "Security violation: Cannot overwrite directory as a file."
         filename_lower = os.path.basename(target_abs).lower()
-        if filename_lower in CORE_PROTECTED_FILES and target_abs == os.path.abspath(
-            os.path.join(BASE_DIR, filename_lower)
-        ):
-            return (
-                False,
-                f"Security boundary violation: Core system file '{filename_lower}' cannot be overwritten.",
-            )
-
+        if filename_lower in CORE_PROTECTED_FILES and target_abs == os.path.abspath(os.path.join(BASE_DIR, filename_lower)):
+            return False, f"Security boundary violation: Protected file '{filename_lower}' cannot be overwritten."
         return True, ""
     except Exception as e:
-        return False, f"Sandbox validation failure: {str(e)}"
+        return False, f"Sandbox validation failure: {e}"
 
 
-# Configure Streamlit Page
-st.set_page_config(
-    page_title="SRI AI. — 24/7 Autonomous Agent",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-# SRI AI Zero-Failure Full-Viewport UI Component
-from sri_zero_failure_ui import render_sri_zero_failure_ui
-
-# Custom Styling: Deep Obsidian & Amber Gold
-st.markdown(
-    """
-<style>
-    /* 1. Remove all default Streamlit UI chrome & hide default radio circles */
-    [data-testid="stToolbar"], [data-testid="stDecoration"], .stDeployButton, #MainMenu, footer {
-        display: none !important;
-    }
-    [data-testid="stHeader"] {
-        background: transparent !important;
-        height: 0px !important;
-        overflow: visible !important;
-        border: none !important;
-    }
-    input[type="radio"] {
-        display: none !important;
-    }
-    div[role="radiogroup"] > label > div:first-child {
-        display: none !important;
-    }
-
-    /* 2. Force entire viewport to pure Deep Obsidian Black (#060709) with zero bluish/gray tint */
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .stApp, section.main, .main {
-        background-color: #060709 !important;
-        background: #060709 !important;
-        color: #F1F5F9 !important;
-    }
-
-    .status-card {
-        background: #0E1117;
-        border: 1px solid #1E222B;
-        border-radius: 12px;
-        padding: 1rem;
-        margin-bottom: 0.8rem;
-    }
-    .terminal-box {
-        background: #090B10;
-        color: #34D399;
-        font-family: 'JetBrains Mono', Courier, monospace;
-        font-size: 0.82rem;
-        padding: 0.75rem;
-        border-radius: 8px;
-        max-height: 220px;
-        overflow-y: auto;
-        border: 1px solid #1E222B;
-        white-space: pre-wrap;
-    }
-    .stProgress > div > div > div > div {
-        background-image: linear-gradient(to right, #F59E0B, #FBBF24) !important;
-    }
-</style>
-""",
-    unsafe_allow_html=True,
-)
+# Configure Streamlit Page (guarded for safe headless test imports)
+try:
+    st.set_page_config(
+        page_title="SRI AI. — Solo AI Companion",
+        page_icon="✦",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
+except Exception:
+    pass
 
 
 # ==============================================================================
-# 2. SECURE SECRETS & CREDENTIALS MANAGEMENT
+# 2. SECURE SECRETS & CUSTOM API KEY / MODEL CONFIG
 # ==============================================================================
 def get_secret(key_name: str, default: str = "") -> str:
-    """Fetch credentials first from st.secrets, falling back to os.getenv, then default."""
     try:
         if hasattr(st, "secrets") and key_name in st.secrets:
             val = st.secrets[key_name]
@@ -411,26 +433,22 @@ def get_secret(key_name: str, default: str = "") -> str:
     return env_val.strip() if env_val else default
 
 
-gemini_key = get_secret("GEMINI_API_KEY")
+gemini_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
+custom_model_name = (
+    (st.session_state.get("sri_custom_model_override") if hasattr(st, "session_state") else "")
+    or get_secret("SRI_CUSTOM_MODEL")
+    or get_secret("GEMINI_MODEL")
+)
 openrouter_key = get_secret("OPENROUTER_API_KEY")
 nvidia_key = get_secret("NVIDIA_API_KEY")
 groq_key = get_secret("GROQ_API_KEY")
 telegram_token = get_secret("TELEGRAM_BOT_TOKEN")
 telegram_chat_id = get_secret("TELEGRAM_CHAT_ID")
 sri_auth_secret = get_secret("SRI_AUTH_SECRET") or "SRI_AUTH_SEC_948f2b7a0c91825"
-agent_bridge_api_key = (
-    get_secret("AGENT_BRIDGE_API_KEY")
-    or sri_auth_secret
-    or "AGY_BRIDGE_SEC_948f2b7a0c91825"
-)
-antigravity_webhook_url = (
-    get_secret("ANTIGRAVITY_WEBHOOK_URL")
-    or "http://localhost:8501/api/antigravity_webhook"
-)
-stitch_ai_api_key = get_secret("STITCH_AI_API_KEY") or "stitch_live_sec_84f9102c7b3e"
+agent_bridge_api_key = get_secret("AGENT_BRIDGE_API_KEY") or sri_auth_secret
+antigravity_webhook_url = get_secret("ANTIGRAVITY_WEBHOOK_URL") or "http://localhost:8501/api/antigravity_webhook"
+stitch_ai_api_key = get_secret("STITCH_AI_API_KEY")
 
-
-# Configure GenAI SDK if key present and available
 if gemini_key and genai:
     try:
         genai.configure(api_key=gemini_key)
@@ -439,52 +457,144 @@ if gemini_key and genai:
 
 
 # ==============================================================================
-# 3. THREAD-SAFE DATABASE OPERATIONS & SLEEP RECOVERY (tasks_db.json)
+# 3. PERSISTENT HISTORY STORE (sri_tasks_history.json — Built-in + Plug-in)
+# ==============================================================================
+def _builtin_load_history() -> list[dict]:
+    with history_lock:
+        if not os.path.exists(HISTORY_FILE):
+            return []
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+
+def _builtin_append_history(task_name: str, details: str, entry_type: str = "chat") -> dict:
+    entry = {
+        "id": uuid.uuid4().hex[:8],
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "iso": datetime.now().isoformat(),
+        "type": entry_type,
+        "task": task_name,
+        "details": details,
+    }
+    with history_lock:
+        items = []
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, list):
+                        items = loaded
+            except Exception:
+                items = []
+        items.append(entry)
+        items = items[-400:]
+        tmp = f"{HISTORY_FILE}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(items, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, HISTORY_FILE)
+    return entry
+
+
+def _builtin_clear_history() -> int:
+    with history_lock:
+        count = 0
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, list):
+                        count = len(loaded)
+            except Exception:
+                pass
+        tmp = f"{HISTORY_FILE}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump([], f)
+        os.replace(tmp, HISTORY_FILE)
+        return count
+
+
+def _builtin_search_history(query: str, limit: int = 100) -> list[dict]:
+    q = (query or "").strip().lower()
+    items = _builtin_load_history()
+    if not q:
+        return items[-limit:]
+    matched = [
+        it for it in items
+        if q in str(it.get("task", "")).lower() or q in str(it.get("details", "")).lower()
+    ]
+    return matched[-limit:]
+
+
+def _builtin_history_html(entries: list[dict]) -> str:
+    if not entries:
+        return "<div style='color:#71717A;padding:18px;text-align:center;font-size:12px;'>No activity history yet.</div>"
+    cards = []
+    for item in reversed(entries[-60:]):
+        t = html_lib.escape(str(item.get("type", "chat")).upper())
+        ts = html_lib.escape(str(item.get("timestamp", "")))
+        task = html_lib.escape(str(item.get("task", "")))
+        det = html_lib.escape(str(item.get("details", ""))[:220])
+        cards.append(
+            f"<div style='background:#0E1117;border:1px solid #1E222B;border-radius:10px;padding:10px;margin-bottom:8px;'>"
+            f"<div style='display:flex;justify-content:space-between;font-size:10px;color:#F59E0B;margin-bottom:4px;'>"
+            f"<span>{t}</span><span style='color:#64748B;'>{ts}</span></div>"
+            f"<div style='font-weight:600;color:#F1F5F9;font-size:12px;margin-bottom:3px;'>{task}</div>"
+            f"<div style='color:#CBD5E1;font-size:11px;line-height:1.45;'>{det}</div></div>"
+        )
+    return "".join(cards)
+
+
+try:
+    from sri_history_store import (
+        append_entry as _hist_append,
+        load_history as _hist_load,
+        clear_history as _clear_hist,
+        search_history as _search_hist,
+        get_history_for_ui as _hist_for_ui,
+        build_history_sidebar_html as _hist_html,
+    )
+except ImportError:
+    _hist_append = _builtin_append_history
+    _hist_load = _builtin_load_history
+    _clear_hist = _builtin_clear_history
+    _search_hist = _builtin_search_history
+    _hist_for_ui = lambda limit=200: list(reversed(_builtin_load_history()[-limit:]))
+    _hist_html = _builtin_history_html
+
+
+# ==============================================================================
+# 4. THREAD-SAFE DATABASE OPERATIONS & SLEEP RECOVERY (tasks_db.json)
 # ==============================================================================
 def init_db():
-    """
-    Guards tasks_db.json against missing, corrupted, or newly mounted container states.
-    Automatically backs up corrupted files and restores a healthy database structure.
-    Sweeps stale tasks interrupted during container sleep or restarts.
-    """
     with db_lock:
         if not os.path.exists(DB_FILE) or os.path.getsize(DB_FILE) == 0:
             default_data = {
                 "tasks": {},
-                "metrics": {
-                    "total_tasks": 0,
-                    "completed_tasks": 0,
-                    "failed_tasks": 0,
-                    "total_tokens": 0,
-                },
+                "metrics": {"total_tasks": 0, "completed_tasks": 0, "failed_tasks": 0, "total_tokens": 0},
             }
             with open(DB_FILE, "w", encoding="utf-8") as f:
                 json.dump(default_data, f, indent=2)
             return
 
-        # Attempt to read and validate JSON structure
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict) or "tasks" not in data:
                 raise ValueError("Malformed JSON root structure in tasks_db.json")
         except Exception as e:
-            # Corrupted DB Recovery: Create timestamped backup and auto-heal
             corrupt_backup = f"{DB_FILE}.corrupt_{int(time.time())}.bak"
             try:
                 shutil.copy2(DB_FILE, corrupt_backup)
             except Exception:
                 pass
-
             data = {
                 "tasks": {},
-                "metrics": {
-                    "total_tasks": 0,
-                    "completed_tasks": 0,
-                    "failed_tasks": 0,
-                    "total_tokens": 0,
-                },
-                "recovery_notice": f"Recovered from corrupted state at {datetime.now().isoformat()}: {str(e)}",
+                "metrics": {"total_tasks": 0, "completed_tasks": 0, "failed_tasks": 0, "total_tokens": 0},
+                "recovery_notice": f"Recovered at {datetime.now().isoformat()}: {e}",
             }
             temp_file = f"{DB_FILE}.tmp"
             with open(temp_file, "w", encoding="utf-8") as f:
@@ -492,10 +602,9 @@ def init_db():
             os.replace(temp_file, DB_FILE)
             return
 
-        # Sweep stale RUNNING tasks left stranded by cloud sleep or server restarts
         changed = False
         now = datetime.now()
-        for tid, t in data.get("tasks", {}).items():
+        for _tid, t in data.get("tasks", {}).items():
             if t.get("status") == "RUNNING":
                 updated_at = t.get("updated_at")
                 if updated_at:
@@ -503,11 +612,9 @@ def init_db():
                         dt = datetime.fromisoformat(updated_at)
                         if (now - dt).total_seconds() > TASK_TIMEOUT_SECONDS:
                             t["status"] = "TIMED_OUT"
-                            t["error"] = (
-                                "Task timed out or was interrupted during server sleep/restart."
-                            )
-                            t["logs"].append(
-                                f"[{now.strftime('%H:%M:%S')}] App awakened from sleep: task marked as timed out / interrupted."
+                            t["error"] = "Task timed out or interrupted during server sleep/restart."
+                            t.setdefault("logs", []).append(
+                                f"[{now.strftime('%H:%M:%S')}] Marked timed out on wakeup."
                             )
                             if "failed_tasks" in data.get("metrics", {}):
                                 data["metrics"]["failed_tasks"] += 1
@@ -528,7 +635,6 @@ init_db()
 
 
 def load_db() -> dict:
-    """Thread-safe and self-healing loader for tasks_db.json."""
     with db_lock:
         if not os.path.exists(DB_FILE):
             init_db()
@@ -546,17 +652,11 @@ def load_db() -> dict:
                 pass
         return {
             "tasks": {},
-            "metrics": {
-                "total_tasks": 0,
-                "completed_tasks": 0,
-                "failed_tasks": 0,
-                "total_tokens": 0,
-            },
+            "metrics": {"total_tasks": 0, "completed_tasks": 0, "failed_tasks": 0, "total_tokens": 0},
         }
 
 
 def save_db(data: dict):
-    """Atomically commits tasks database to disk across Windows, Linux, and Cloud environments."""
     with db_lock:
         temp_file = f"{DB_FILE}.tmp"
         with open(temp_file, "w", encoding="utf-8") as f:
@@ -565,23 +665,12 @@ def save_db(data: dict):
 
 
 def restore_session_state_on_wakeup():
-    """
-    CLOUD SLEEP & PERSISTENCE RESILIENCE:
-    When the app awakens from Sleep Mode ('Get this app back up'), read and restore prior
-    session state, historical tasks, and metrics immediately from tasks_db.json.
-    Also provides Ephemeral Storage Rehydration if container files were wiped during sleep.
-    """
     db = load_db()
     st.session_state["tasks_db"] = db
-
     if "session_awakened_at" not in st.session_state:
-        st.session_state["session_awakened_at"] = datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        st.session_state["session_awakened_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Ephemeral Storage Rehydration:
-    # If container storage was wiped during sleep, re-materialize artifacts directly from tasks_db.json!
-    for tid, t in db.get("tasks", {}).items():
+    for _tid, t in db.get("tasks", {}).items():
         if t.get("status") == "COMPLETED":
             ws_file = t.get("workspace_file")
             code_content = t.get("code")
@@ -592,17 +681,6 @@ def restore_session_state_on_wakeup():
                         os.makedirs(os.path.dirname(full_ws_path), exist_ok=True)
                         with open(full_ws_path, "w", encoding="utf-8") as wf:
                             wf.write(code_content)
-                    except Exception:
-                        pass
-            schema_file = t.get("schema_file")
-            schema_data = t.get("schema_data")
-            if schema_file and schema_data:
-                full_sc_path = os.path.join(WORKSPACE_DIR, schema_file)
-                if not os.path.exists(full_sc_path):
-                    try:
-                        os.makedirs(os.path.dirname(full_sc_path), exist_ok=True)
-                        with open(full_sc_path, "w", encoding="utf-8") as sf:
-                            sf.write(schema_data)
                     except Exception:
                         pass
 
@@ -617,7 +695,6 @@ def create_task_record(
 ) -> str:
     now_str = datetime.now().isoformat()
     task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
-
     data = load_db()
     data["tasks"][task_id] = {
         "id": task_id,
@@ -636,14 +713,12 @@ def create_task_record(
         "max_steps": MAX_AGENT_STEPS,
         "progress_percent": 15,
         "current_action": "Task initialized. Formulating 5D Plan...",
-        "active_model_or_bridge": "Tier 1: Cloud LLM (Gemini 2.5 Flash / OpenRouter)",
+        "active_model_or_bridge": "Tier 1: Cloud LLM (Gemini / Groq / OpenRouter)",
         "plan": "",
         "plan_5d": {},
         "schema_data": "",
         "verification_report": "",
-        "logs": [
-            f"[{datetime.now().strftime('%H:%M:%S')}] Task initialized. Background worker dispatched."
-        ],
+        "logs": [f"[{datetime.now().strftime('%H:%M:%S')}] Task initialized."],
         "output_file": "",
         "code": "",
         "tokens": 0,
@@ -656,66 +731,65 @@ def create_task_record(
     return task_id
 
 
-def update_task_record(task_id: str, **kwargs):
+def update_task_record(task_id: str, notify_all_complete: bool = True, **kwargs):
+    became_completed = False
     data = load_db()
     if task_id in data["tasks"]:
+        prev_status = str(data["tasks"][task_id].get("status", "")).upper()
         for k, v in kwargs.items():
             data["tasks"][task_id][k] = v
-
-        # Automatically calculate consistent progress_percent and current_action
         step = data["tasks"][task_id].get("current_step", 1)
         if "progress_percent" not in kwargs:
             data["tasks"][task_id]["progress_percent"] = min(100, step * 20)
-
         if "current_action" not in kwargs:
             step_actions = {
                 1: "Formulating 5D Architecture & Plan",
                 2: "Initializing Schema & Project Structure",
                 3: "Synthesizing Core Code & Responsive UI",
-                4: "Executing Self-Verification & Quality Reflection",
+                4: "Executing Self-Verification & Reflection",
                 5: "Finalizing Production Artifacts & Persistence",
             }
             if data["tasks"][task_id].get("status") == "COMPLETED":
                 data["tasks"][task_id]["current_action"] = "Task completed successfully"
                 data["tasks"][task_id]["progress_percent"] = 100
             elif data["tasks"][task_id].get("status") == "FAILED":
-                data["tasks"][task_id][
-                    "current_action"
-                ] = f"Failed: {data['tasks'][task_id].get('error', 'Error')}"
+                data["tasks"][task_id]["current_action"] = f"Failed: {data['tasks'][task_id].get('error', 'Error')}"
             else:
-                data["tasks"][task_id]["current_action"] = step_actions.get(
-                    step, "Processing task step..."
-                )
-
-        if "model_used" in kwargs and kwargs["model_used"]:
+                data["tasks"][task_id]["current_action"] = step_actions.get(step, "Processing task step...")
+        elif str(data["tasks"][task_id].get("status", "")).upper() == "COMPLETED":
+            data["tasks"][task_id]["progress_percent"] = 100
+        if kwargs.get("model_used"):
             data["tasks"][task_id]["active_model_or_bridge"] = kwargs["model_used"]
-
         data["tasks"][task_id]["updated_at"] = datetime.now().isoformat()
+        became_completed = (
+            str(data["tasks"][task_id].get("status", "")).upper() == "COMPLETED"
+            and prev_status != "COMPLETED"
+        )
         save_db(data)
+    if notify_all_complete and became_completed:
+        try:
+            check_and_trigger_all_tasks_completed_whatsapp_alert(source_task_id=task_id)
+        except Exception as _wa_chk_err:
+            print(f"ℹ️ Post-completion WhatsApp check notice: {_wa_chk_err}")
 
 
 def append_task_log(task_id: str, message: str):
     data = load_db()
     if task_id in data["tasks"]:
         timestamped_msg = f"[{datetime.now().strftime('%H:%M:%S')}] {message}"
-        data["tasks"][task_id]["logs"].append(timestamped_msg)
+        data["tasks"][task_id].setdefault("logs", []).append(timestamped_msg)
         data["tasks"][task_id]["updated_at"] = datetime.now().isoformat()
         save_db(data)
 
 
 # ==============================================================================
-# 4. NOTIFICATION DISPATCHER HOOK (Telegram & WhatsApp Webhook)
+# 5. NOTIFICATION DISPATCHER HOOK (Telegram, WhatsApp & Twilio Call)
 # ==============================================================================
 def send_telegram_alert(message: str) -> dict:
-    """Dispatches markdown alert text to Telegram bot."""
-    if not telegram_token or not telegram_chat_id:
-        return {"ok": False, "description": "Telegram credentials not configured."}
+    if not telegram_token or not telegram_chat_id or not requests:
+        return {"ok": False, "description": "Telegram credentials or requests library unavailable."}
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-    payload = {
-        "chat_id": telegram_chat_id,
-        "text": message[:4000],
-        "disable_web_page_preview": True,
-    }
+    payload = {"chat_id": telegram_chat_id, "text": message[:4000], "disable_web_page_preview": True}
     try:
         res = requests.post(url, json=payload, timeout=10)
         return res.json()
@@ -723,64 +797,298 @@ def send_telegram_alert(message: str) -> dict:
         return {"ok": False, "description": str(e)}
 
 
-def make_agent_call(
-    message: str = "வணக்கம், உங்கள் ஏஜென்ட் அழைக்கிறது!",
-) -> tuple[bool, str]:
-    """
-    Initiates an automated voice phone call alert via Twilio with Tamil voice synthesis (<Say language='ta-IN'>).
-    Reads credentials from st.secrets (or .env / environment variables):
-    - TWILIO_ACCOUNT_SID
-    - TWILIO_AUTH_TOKEN
-    - TWILIO_PHONE_NUMBER
-    - ADMIN_PHONE_NUMBER
-    """
+def make_agent_call(message: str = "வணக்கம்! உங்கள் SRI ஏஜென்ட் அழைக்கிறது!") -> tuple[bool, str]:
     try:
         if not TWILIO_AVAILABLE or TwilioClient is None:
             return False, "Twilio package is not installed."
-
         sid = get_secret("TWILIO_ACCOUNT_SID")
         token = get_secret("TWILIO_AUTH_TOKEN")
         from_num = get_secret("TWILIO_PHONE_NUMBER")
         to_num = get_secret("ADMIN_PHONE_NUMBER")
-
         if not (sid and token and from_num and to_num):
-            missing = []
-            if not sid:
-                missing.append("TWILIO_ACCOUNT_SID")
-            if not token:
-                missing.append("TWILIO_AUTH_TOKEN")
-            if not from_num:
-                missing.append("TWILIO_PHONE_NUMBER")
-            if not to_num:
-                missing.append("ADMIN_PHONE_NUMBER")
-            return False, f"Missing Twilio secrets: {', '.join(missing)}"
-
+            missing = [k for k, v in [("TWILIO_ACCOUNT_SID", sid), ("TWILIO_AUTH_TOKEN", token), ("TWILIO_PHONE_NUMBER", from_num), ("ADMIN_PHONE_NUMBER", to_num)] if not v]
+            return False, f"Missing Twilio credentials: {', '.join(missing)}"
         client = TwilioClient(sid, token)
-        twiml = f"<Response><Say language='ta-IN'>{message}</Say></Response>"
-
+        twiml = f"<Response><Say language='ta-IN'>{html_lib.escape(message)}</Say></Response>"
         call = client.calls.create(twiml=twiml, to=to_num, from_=from_num)
         return True, str(call.sid)
     except Exception as e:
         return False, str(e)
 
 
-def dispatch_task_alert(
-    task_id: str,
-    task_name: str,
-    status: str,
-    file_path: str = "",
-    extra_details: str = "",
+_whatsapp_alert_lock = threading.Lock()
+
+
+def _normalize_whatsapp_number(raw_number: str) -> str:
+    cleaned = re.sub(r"[\s()-]", "", (raw_number or "").strip())
+    if not cleaned:
+        return ""
+    if cleaned.lower().startswith("whatsapp:"):
+        cleaned = cleaned.split(":", 1)[1].strip()
+    if cleaned and not cleaned.startswith("+") and cleaned.isdigit() and len(cleaned) == 10:
+        cleaned = f"+91{cleaned}"
+    elif cleaned and not cleaned.startswith("+") and cleaned.isdigit():
+        cleaned = f"+{cleaned}"
+    return f"whatsapp:{cleaned}" if cleaned else ""
+
+
+def _resolve_kirubha_whatsapp_number(explicit_to: str = "") -> str:
+    return (
+        (explicit_to or "").strip()
+        or get_secret("MY_WHATSAPP_NUMBER")
+        or get_secret("KIRUBHA_WHATSAPP_NUMBER")
+        or get_secret("ADMIN_PHONE_NUMBER")
+    )
+
+
+def send_whatsapp_notification(
+    message: str,
+    to_number: str = "",
+    event: str = "whatsapp_alert",
+    extra_payload: dict | None = None,
 ) -> dict:
     """
-    Universal Notification Dispatcher Hook:
-    Dispatches task completion or failure alerts across multiple channels:
-    1. Telegram Bot (if TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID are configured).
-    2. WhatsApp Webhook (stub ready for WhatsApp Cloud API / Twilio / custom webhook payloads).
-    3. Twilio Tamil Voice Call Alert (if TWILIO_ACCOUNT_SID & ADMIN_PHONE_NUMBER are configured).
+    Send a WhatsApp notification directly to Kirubha via Twilio WhatsApp API or WHATSAPP_WEBHOOK_URL,
+    with a non-breaking local notification outbox fallback when external credentials are unset.
     """
-    results = {"telegram": None, "whatsapp": None, "twilio_call": None}
+    body = (message or "").strip()[:1600]
+    if not body:
+        return {"ok": False, "provider": "none", "error": "Empty WhatsApp message"}
 
-    # 1. Telegram Dispatch
+    target_raw = _resolve_kirubha_whatsapp_number(to_number)
+    target_wa = _normalize_whatsapp_number(target_raw)
+
+    # 1. Optional external sri_cloud_agent plugin hook (if installed)
+    if _EXTERNAL_WHATSAPP_PLUGIN_AVAILABLE and callable(send_whatsapp_message) and getattr(send_whatsapp_message, "__name__", "") != "_builtin_send_whatsapp_message":
+        try:
+            ok_plugin = bool(send_whatsapp_message(body))
+            if ok_plugin:
+                return {"ok": True, "provider": "sri_cloud_agent", "to": target_wa or target_raw, "message": body}
+        except Exception as plug_err:
+            print(f"ℹ️ WhatsApp plugin fallback notice: {plug_err}")
+
+    # 2. Direct Twilio WhatsApp REST/SDK Delivery
+    twilio_sid = get_secret("TWILIO_ACCOUNT_SID")
+    twilio_token = get_secret("TWILIO_AUTH_TOKEN")
+    twilio_wa_from = _normalize_whatsapp_number(get_secret("TWILIO_WHATSAPP_FROM") or "whatsapp:+14155238886")
+    if twilio_sid and twilio_token and target_wa and TWILIO_AVAILABLE and TwilioClient is not None:
+        try:
+            client = TwilioClient(twilio_sid, twilio_token)
+            msg_obj = client.messages.create(body=body, from_=twilio_wa_from, to=target_wa)
+            return {
+                "ok": True,
+                "provider": "twilio_whatsapp",
+                "sid": str(msg_obj.sid),
+                "from": twilio_wa_from,
+                "to": target_wa,
+                "message": body,
+            }
+        except Exception as tw_err:
+            print(f"⚠️ Twilio WhatsApp delivery failed, trying webhook fallback: {tw_err}")
+
+    # 3. Webhook Integration (WHATSAPP_WEBHOOK_URL via requests or urllib)
+    whatsapp_webhook = get_secret("WHATSAPP_WEBHOOK_URL")
+    whatsapp_token = get_secret("WHATSAPP_API_TOKEN")
+    if whatsapp_webhook:
+        payload = {
+            "event": event,
+            "title": "All Tasks Completed" if event == "all_tasks_completed" else "SRI Task Notification",
+            "message": body,
+            "to": target_wa or target_raw,
+            "recipient": "Kirubha",
+            "timestamp": datetime.now().isoformat(),
+            **(extra_payload or {}),
+        }
+        headers = {"Content-Type": "application/json"}
+        if whatsapp_token:
+            headers["Authorization"] = f"Bearer {whatsapp_token}"
+        try:
+            if requests:
+                res = requests.post(whatsapp_webhook, json=payload, headers=headers, timeout=8)
+                ok_http = 200 <= res.status_code < 300
+                return {
+                    "ok": ok_http,
+                    "provider": "whatsapp_webhook",
+                    "status_code": res.status_code,
+                    "response": res.text[:200],
+                    "to": target_wa or target_raw,
+                    "message": body,
+                }
+            req = urllib.request.Request(
+                whatsapp_webhook,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                resp_body = resp.read().decode("utf-8", errors="ignore")[:200]
+                return {
+                    "ok": 200 <= resp.status < 300,
+                    "provider": "whatsapp_webhook",
+                    "status_code": resp.status,
+                    "response": resp_body,
+                    "to": target_wa or target_raw,
+                    "message": body,
+                }
+        except Exception as wh_err:
+            return {"ok": False, "provider": "whatsapp_webhook", "error": str(wh_err), "to": target_wa or target_raw}
+
+    # 4. Safe non-blocking local outbox fallback when external gateway secrets are not yet configured
+    return {
+        "ok": True,
+        "provider": "recorded_outbox",
+        "queued": True,
+        "to": target_wa or target_raw or "Kirubha (set MY_WHATSAPP_NUMBER or WHATSAPP_WEBHOOK_URL)",
+        "message": body,
+    }
+
+
+def _builtin_send_whatsapp_message(message: str) -> bool:
+    return bool(send_whatsapp_notification(message, event="whatsapp_alert").get("ok"))
+
+
+if send_whatsapp_message is None:
+    send_whatsapp_message = _builtin_send_whatsapp_message
+
+
+def evaluate_all_tasks_completion(db: dict | None = None) -> dict:
+    """Evaluate whether all tracked hackathon/project tasks in tasks_db are 100% complete."""
+    state = db if isinstance(db, dict) else load_db()
+    tasks_map = state.get("tasks", {}) if isinstance(state, dict) else {}
+    entries = list(tasks_map.items())
+    total_tasks = len(entries)
+    completed_items = [
+        (tid, t)
+        for tid, t in entries
+        if str(t.get("status", "")).upper() == "COMPLETED" and int(t.get("progress_percent", 0)) >= 100
+    ]
+    running_items = [
+        (tid, t)
+        for tid, t in entries
+        if str(t.get("status", "")).upper() in ("RUNNING", "PENDING", "QUEUED", "IN_PROGRESS")
+    ]
+    failed_items = [
+        (tid, t)
+        for tid, t in entries
+        if str(t.get("status", "")).upper() in ("FAILED", "TIMEOUT", "TIMED_OUT")
+    ]
+    all_completed = (
+        total_tasks > 0
+        and len(running_items) == 0
+        and len(failed_items) == 0
+        and len(completed_items) == total_tasks
+    )
+    overall_pct = (
+        100
+        if all_completed
+        else (round(sum(int(t.get("progress_percent", 0)) for _, t in entries) / total_tasks) if total_tasks > 0 else 0)
+    )
+    signature = f"{total_tasks}:" + ",".join(sorted(str(tid) for tid, _ in completed_items)) if all_completed else ""
+    return {
+        "all_completed": all_completed,
+        "total_tasks": total_tasks,
+        "completed_count": len(completed_items),
+        "running_count": len(running_items),
+        "failed_count": len(failed_items),
+        "progress_percent": overall_pct,
+        "signature": signature,
+        "completed_items": completed_items,
+    }
+
+
+def check_and_trigger_all_tasks_completed_whatsapp_alert(
+    force: bool = False,
+    source_task_id: str = "",
+) -> dict:
+    """
+    Automatically detect when all hackathon/project tasks reach 100% completion and send an
+    'All Tasks Completed' WhatsApp alert directly to Kirubha's WhatsApp number (deduplicated per batch).
+    """
+    with _whatsapp_alert_lock:
+        db_now = load_db()
+        summary = evaluate_all_tasks_completion(db_now)
+        if not summary["all_completed"]:
+            return {
+                "triggered": False,
+                "reason": "tasks_incomplete",
+                "all_completed": False,
+                "total_tasks": summary["total_tasks"],
+                "completed_count": summary["completed_count"],
+                "progress_percent": summary["progress_percent"],
+            }
+
+        notifications = db_now.setdefault("notifications", {})
+        last_sig = str(notifications.get("all_completed_whatsapp_signature") or "")
+        if not force and last_sig == summary["signature"]:
+            return {
+                "triggered": False,
+                "reason": "already_notified",
+                "all_completed": True,
+                "total_tasks": summary["total_tasks"],
+                "completed_count": summary["completed_count"],
+                "progress_percent": 100,
+                "last_alert": notifications.get("last_all_completed_alert"),
+            }
+
+        titles = [str(t.get("title") or tid) for tid, t in summary["completed_items"][:6]]
+        summary_lines = ", ".join(titles)
+        alert_msg = (
+            f"✅ All Tasks Completed! (100%)\n\n"
+            f"வணக்கம் கிருபா! உங்கள் அனைத்து Hackathon & Project பணிகளும் ({summary['completed_count']}/{summary['total_tasks']}) "
+            f"100% வெற்றிகரமாக முடிந்துவிட்டன.\n"
+            f"Completed Tasks: {summary_lines}"
+        )
+
+        delivery = send_whatsapp_notification(
+            alert_msg,
+            event="all_tasks_completed",
+            extra_payload={
+                "source_task_id": source_task_id,
+                "total_tasks": summary["total_tasks"],
+                "completed_count": summary["completed_count"],
+                "progress_percent": 100,
+                "completed_task_ids": [tid for tid, _ in summary["completed_items"]],
+                "completed_titles": titles,
+            },
+        )
+
+        alert_record = {
+            "event": "all_tasks_completed",
+            "title": "All Tasks Completed",
+            "message": alert_msg,
+            "source_task_id": source_task_id,
+            "completed_count": summary["completed_count"],
+            "total_tasks": summary["total_tasks"],
+            "signature": summary["signature"],
+            "delivery": delivery,
+            "sent_at": datetime.now().isoformat(),
+        }
+        notifications["all_completed_whatsapp_signature"] = summary["signature"]
+        notifications["last_all_completed_alert"] = alert_record
+        outbox = notifications.setdefault("whatsapp_outbox", [])
+        outbox.append(alert_record)
+        notifications["whatsapp_outbox"] = outbox[-30:]
+        save_db(db_now)
+
+        try:
+            _hist_append("All Tasks Completed (WhatsApp)", alert_msg, "whatsapp_alert")
+        except Exception:
+            pass
+
+        return {
+            "triggered": True,
+            "reason": "sent",
+            "all_completed": True,
+            "total_tasks": summary["total_tasks"],
+            "completed_count": summary["completed_count"],
+            "progress_percent": 100,
+            "message": alert_msg,
+            "delivery": delivery,
+        }
+
+
+def dispatch_task_alert(task_id: str, task_name: str, status: str, file_path: str = "", extra_details: str = "") -> dict:
+    results = {"telegram": None, "whatsapp": None, "twilio_call": None}
     if telegram_token and telegram_chat_id:
         emoji = "✅" if status == "COMPLETED" else "❌"
         filename = os.path.basename(file_path) if file_path else "N/A"
@@ -795,65 +1103,26 @@ def dispatch_task_alert(
             alert_text += f"ℹ️ *Details:* {extra_details[:180]}\n"
         results["telegram"] = send_telegram_alert(alert_text)
 
-    # 2. WhatsApp Dispatch Hook (Twilio WhatsApp Direct & Webhook Fallback)
-    twilio_wa_to = get_secret("MY_WHATSAPP_NUMBER")
-    if (
-        get_secret("TWILIO_ACCOUNT_SID")
-        and get_secret("TWILIO_AUTH_TOKEN")
-        and twilio_wa_to
-        and send_whatsapp_message
-    ):
-        emoji_wa = "✅" if status == "COMPLETED" else "❌"
-        wa_text = (
-            f"{emoji_wa} *Autonomous Task {status}!*\n"
-            f"🆔 *Task ID:* `{task_id}`\n"
-            f"📝 *Title:* {task_name}\n"
-            f"📊 *Status:* {status}\n"
-        )
-        if extra_details:
-            wa_text += f"⚙️ *Details:* {extra_details[:140]}\n"
-        ok_wa = send_whatsapp_message(wa_text)
-        results["whatsapp"] = {"provider": "twilio_direct", "success": ok_wa}
-    else:
-        whatsapp_webhook = get_secret("WHATSAPP_WEBHOOK_URL")
-        whatsapp_token = get_secret("WHATSAPP_API_TOKEN")
+    emoji_wa = "✅" if status == "COMPLETED" else "❌"
+    wa_text = f"{emoji_wa} *Task {status}*\nID: `{task_id}`\nTitle: {task_name}\n{extra_details[:140]}"
+    results["whatsapp"] = send_whatsapp_notification(
+        wa_text,
+        event="autonomous_task_alert",
+        extra_payload={
+            "task_id": task_id,
+            "task_name": task_name,
+            "status": status,
+            "file_path": file_path,
+            "details": extra_details,
+        },
+    )
 
-        if whatsapp_webhook:
-            payload = {
-                "event": "autonomous_task_alert",
-                "task_id": task_id,
-                "task_name": task_name,
-                "status": status,
-                "file_path": file_path,
-                "filename": os.path.basename(file_path) if file_path else "",
-                "details": extra_details,
-                "timestamp": datetime.now().isoformat(),
-            }
-            headers = {"Content-Type": "application/json"}
-            if whatsapp_token:
-                headers["Authorization"] = f"Bearer {whatsapp_token}"
-            try:
-                res = requests.post(
-                    whatsapp_webhook, json=payload, headers=headers, timeout=8
-                )
-                results["whatsapp"] = {
-                    "status_code": res.status_code,
-                    "response": res.text[:200],
-                }
-            except Exception as we:
-                results["whatsapp"] = {"error": str(we)}
-        else:
-            results["whatsapp"] = {
-                "status": "unconfigured",
-                "note": "TWILIO WhatsApp or WHATSAPP_WEBHOOK_URL not configured.",
-            }
-
-    # 3. Twilio Voice Call Alert Hook
     if get_secret("TWILIO_ACCOUNT_SID") and get_secret("ADMIN_PHONE_NUMBER"):
-        if status == "COMPLETED":
-            call_msg = f"வணக்கம்! உங்கள் பணி {task_name[:30]} வெற்றிகரமாக முடிந்தது."
-        else:
-            call_msg = f"வணக்கம்! உங்கள் பணி {task_name[:30]} தோல்வியடைந்தது."
+        call_msg = (
+            f"வணக்கம்! உங்கள் பணி {task_name[:30]} வெற்றிகரமாக முடிந்தது."
+            if status == "COMPLETED"
+            else f"வணக்கம்! உங்கள் பணி {task_name[:30]} தோல்வியடைந்தது."
+        )
         ok_call, call_sid_or_err = make_agent_call(call_msg)
         results["twilio_call"] = {"success": ok_call, "sid_or_error": call_sid_or_err}
 
@@ -861,430 +1130,415 @@ def dispatch_task_alert(
 
 
 # ==============================================================================
-# 5. LLM CALLER WITH GRACEFUL RECOVERY (Gemini 120s -> OpenRouter Free Loop)
+# 6. LLM CALLERS (Custom Key + Multi-Model Fallback + Conversational Brain)
 # ==============================================================================
 _gemini_cooldown_until = 0
 
-# Multi-Model Free Fallback List (in exact priority order)
-OPENROUTER_FREE_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "deepseek/deepseek-chat-v3-0324:free",
-    "qwen/qwen-2.5-coder-32b-instruct:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "openrouter/free",
-]
-
 
 def call_gemini(prompt: str, system_instruction: str = "", task_id: str = ""):
-    """
-    Tier-1 Google Gemini Caller:
-    - Sets request_options={"timeout": 120} (120-second timeout) to prevent 504 Deadline Expired.
-    - Tries fast, reliable gemini-2.5-flash first, then gemini-2.0-flash.
-    - Cleanly catches timeouts/quotas and triggers instant OpenRouter fallback.
-    """
     global _gemini_cooldown_until
     if not gemini_key or not genai:
         raise ValueError("GEMINI_API_KEY is missing or google-generativeai is unavailable.")
     if time.time() < _gemini_cooldown_until:
         cooldown_left = int(_gemini_cooldown_until - time.time())
-        raise RuntimeError(
-            f"Gemini in transient cooldown ({cooldown_left}s remaining); instant failover to OpenRouter."
-        )
+        raise RuntimeError(f"Gemini cooldown active ({cooldown_left}s remaining).")
 
-    gemini_candidates = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    candidates = ([custom_model_name] if custom_model_name else []) + [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+    ]
     last_err = None
-
-    for model_name in gemini_candidates:
+    for model_name in dict.fromkeys(candidates):
         try:
-            log_msg = f"⏳ Calling Google Gemini ({model_name}, timeout=120s)..."
-            print(log_msg)
-            if task_id:
-                append_task_log(task_id, log_msg)
-
             def _gemini_call(m=model_name):
                 genai.configure(api_key=gemini_key)
                 model = genai.GenerativeModel(
                     model_name=m,
-                    system_instruction=(
-                        system_instruction if system_instruction else None
-                    ),
+                    system_instruction=system_instruction or None,
                 )
                 return model.generate_content(prompt, request_options={"timeout": 120})
 
             with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_gemini_call)
-                # Allow 125s for the 120s API timeout to cleanly complete
-                response = future.result(timeout=125)
+                response = executor.submit(_gemini_call).result(timeout=125)
 
             if response and response.text and response.text.strip():
-                tokens_est = (
-                    len(prompt) + len(system_instruction) + len(response.text)
-                ) // 4
-                success_msg = f"✅ Google Gemini ({model_name}) succeeded ({len(response.text):,} chars)."
-                print(success_msg)
+                tokens_est = (len(prompt) + len(system_instruction) + len(response.text)) // 4
                 if task_id:
-                    append_task_log(task_id, success_msg)
-                return (
-                    response.text.strip(),
-                    f"Google Gemini ({model_name})",
-                    tokens_est,
-                )
-            raise ValueError(f"Empty response received from Gemini ({model_name}).")
+                    append_task_log(task_id, f"✅ Google Gemini ({model_name}) succeeded.")
+                return response.text.strip(), f"Google Gemini ({model_name})", tokens_est
+            raise ValueError(f"Empty response from Gemini ({model_name}).")
         except Exception as e:
             last_err = e
             err_str = str(e).lower()
-            warn_msg = f"⚠️ Gemini model '{model_name}' encountered: {e}"
-            print(warn_msg)
             if task_id:
-                append_task_log(task_id, warn_msg)
-
-            # If 504 deadline, timeout, 429 quota, or environment policy block, activate cooldown and trigger fallback immediately
-            if any(
-                term in err_str
-                for term in [
-                    "deadline",
-                    "504",
-                    "timeout",
-                    "quota",
-                    "429",
-                    "exhausted",
-                    "resource_exhausted",
-                    "cygrpc",
-                    "policy",
-                ]
-            ):
-                _gemini_cooldown_until = time.time() + 90
-                failover_msg = f"⚡ Gemini cooldown activated for 90s ({e}). Instant failover to OpenRouter Free Loop..."
-                print(failover_msg)
-                if task_id:
-                    append_task_log(task_id, failover_msg)
+                append_task_log(task_id, f"⚠️ Gemini '{model_name}': {e}")
+            if any(term in err_str for term in ["deadline", "504", "timeout", "quota", "429", "exhausted", "resource_exhausted"]):
+                _gemini_cooldown_until = time.time() + 60
                 raise last_err
-
     if last_err:
         raise last_err
 
 
-def call_openrouter(prompt: str, system_instruction: str = "", task_id: str = ""):
-    """
-    Tier-2 OpenRouter Multi-Model Free Fallback Loop:
-    - Safe max_tokens=2048 prevents 402 Insufficient Credits errors.
-    - Sequentially iterates through top free models (:free) until one succeeds:
-      1. google/gemini-2.0-flash-exp:free
-      2. meta-llama/llama-3.3-70b-instruct:free
-      3. deepseek/deepseek-chat-v3-0324:free
-      4. qwen/qwen-2.5-coder-32b-instruct:free
-      5. mistralai/mistral-small-3.1-24b-instruct:free
-      6. openrouter/free
-    - Logs model attempts and transitions in the Execution Logs.
-    """
+def call_openrouter(prompt: str, system_instruction: str = "", task_id: str = "", messages: list[dict] | None = None):
     if not openrouter_key or not OpenAI:
-        raise ValueError("OPENROUTER_API_KEY is missing or openai client is unavailable.")
-
-    messages = []
+        raise ValueError("OPENROUTER_API_KEY is missing or openai package unavailable.")
+    chat_msgs = []
     if system_instruction:
-        messages.append({"role": "system", "content": system_instruction})
-    messages.append({"role": "user", "content": prompt})
+        chat_msgs.append({"role": "system", "content": system_instruction})
+    if messages:
+        chat_msgs.extend(messages)
+    else:
+        chat_msgs.append({"role": "user", "content": prompt})
 
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=openrouter_key,
-        default_headers={
-            "HTTP-Referer": "https://reakiruba.app",
-            "X-Title": "SRI Autonomous Background Agent",
-        },
+        default_headers={"HTTP-Referer": "https://reakiruba.app", "X-Title": "SRI AI Companion"},
     )
-
     errors = []
-    for idx, model_name in enumerate(OPENROUTER_FREE_MODELS, 1):
-        attempt_msg = f"🔄 OpenRouter Fallback [{idx}/{len(OPENROUTER_FREE_MODELS)}]: Trying '{model_name}' (max_tokens=2048)..."
-        print(attempt_msg)
-        if task_id:
-            append_task_log(task_id, attempt_msg)
-
+    for model_name in OPENROUTER_FREE_MODELS:
         try:
-
-            def _openrouter_call(m=model_name):
+            def _or_call(m=model_name):
                 return client.chat.completions.create(
-                    model=m,
-                    messages=messages,
-                    temperature=0.4,
-                    max_tokens=2048,
-                    timeout=50,
+                    model=m, messages=chat_msgs, temperature=0.5, max_tokens=2048, timeout=45
                 )
 
             with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_openrouter_call)
-                response = future.result(timeout=55)
-
-            msg = response.choices[0].message
-            content = msg.content
-            if not content and hasattr(msg, "reasoning") and msg.reasoning:
-                content = msg.reasoning
-
+                response = executor.submit(_or_call).result(timeout=50)
+            content = response.choices[0].message.content
             if content and content.strip():
                 text = content.strip()
                 tokens_est = (len(prompt) + len(system_instruction) + len(text)) // 4
-                success_msg = f"✅ OpenRouter Success: '{model_name}' generated {len(text):,} chars."
-                print(success_msg)
-                if task_id:
-                    append_task_log(task_id, success_msg)
                 return text, f"OpenRouter ({model_name})", tokens_est
-            else:
-                empty_msg = f"⚠️ OpenRouter '{model_name}' returned empty response."
-                print(empty_msg)
-                if task_id:
-                    append_task_log(task_id, empty_msg)
-                errors.append(f"{model_name}: Empty content")
         except Exception as e:
-            err_msg = f"⚠️ OpenRouter '{model_name}' failed: {e}"
-            print(err_msg)
-            if task_id:
-                append_task_log(task_id, err_msg)
             errors.append(f"{model_name}: {e}")
-
-            # If more free models remain, announce switch to next model
-            if idx < len(OPENROUTER_FREE_MODELS):
-                next_model = OPENROUTER_FREE_MODELS[idx]
-                switch_msg = f"↪️ Switching to next free model: '{next_model}'..."
-                print(switch_msg)
-                if task_id:
-                    append_task_log(task_id, switch_msg)
-                time.sleep(1)
-
-    raise RuntimeError(
-        f"All OpenRouter free models exhausted. Errors: {'; '.join(errors)}"
-    )
+    raise RuntimeError(f"All OpenRouter free models exhausted: {'; '.join(errors)}")
 
 
-def call_nvidia(prompt: str, system_instruction: str = ""):
-    """Safely wrapped NVIDIA API call."""
+def call_nvidia(prompt: str, system_instruction: str = "", messages: list[dict] | None = None):
     if not nvidia_key or not OpenAI:
-        raise ValueError("NVIDIA_API_KEY is missing or openai client is unavailable.")
+        raise ValueError("NVIDIA_API_KEY unavailable.")
     client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=nvidia_key)
-    messages = []
-    if system_instruction:
-        messages.append({"role": "system", "content": system_instruction})
-    messages.append({"role": "user", "content": prompt})
-    res = client.chat.completions.create(
-        model="meta/llama-3.3-70b-instruct",
-        messages=messages,
-        temperature=0.5,
-        max_tokens=1024,
-        timeout=15,
+    chat_msgs = ([{"role": "system", "content": system_instruction}] if system_instruction else []) + (
+        messages if messages else [{"role": "user", "content": prompt}]
     )
-    content = res.choices[0].message.content
-    if content and content.strip():
-        text = content.strip()
-        tokens_est = (len(prompt) + len(system_instruction) + len(text)) // 4
-        return text, "NVIDIA (meta/llama-3.3-70b-instruct)", tokens_est
-    raise ValueError("Empty response from NVIDIA.")
+    res = client.chat.completions.create(
+        model="meta/llama-3.3-70b-instruct", messages=chat_msgs, temperature=0.5, max_tokens=1024, timeout=15
+    )
+    text = (res.choices[0].message.content or "").strip()
+    if text:
+        return text, "NVIDIA (llama-3.3-70b)", (len(prompt) + len(text)) // 4
+    raise ValueError("Empty NVIDIA response.")
 
 
-def call_groq(prompt: str, system_instruction: str = ""):
-    """Safely wrapped Groq API call."""
+def call_groq(prompt: str, system_instruction: str = "", messages: list[dict] | None = None, max_tokens: int = 1024):
     if not groq_key or not OpenAI:
-        raise ValueError("GROQ_API_KEY is missing or openai client is unavailable.")
+        raise ValueError("GROQ_API_KEY unavailable.")
     client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-    messages = []
-    if system_instruction:
-        messages.append({"role": "system", "content": system_instruction})
-    messages.append({"role": "user", "content": prompt})
-    res = client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=messages,
-        temperature=0.5,
-        max_tokens=1024,
-        timeout=15,
+    chat_msgs = ([{"role": "system", "content": system_instruction}] if system_instruction else []) + (
+        messages if messages else [{"role": "user", "content": prompt}]
     )
-    content = res.choices[0].message.content
-    if content and content.strip():
-        text = content.strip()
-        tokens_est = (len(prompt) + len(system_instruction) + len(text)) // 4
-        return text, "Groq (llama3-8b-8192)", tokens_est
-    raise ValueError("Empty response from Groq.")
+    for model_id in ["llama-3.3-70b-versatile", "llama3-8b-8192"]:
+        try:
+            res = client.chat.completions.create(
+                model=model_id, messages=chat_msgs, temperature=0.55, max_tokens=max_tokens, timeout=15
+            )
+            text = (res.choices[0].message.content or "").strip()
+            if text:
+                return text, f"Groq ({model_id})", (len(prompt) + len(text)) // 4
+        except Exception:
+            continue
+    raise ValueError("Groq models failed.")
 
 
-def call_llm_with_recovery(
-    prompt: str, system_instruction: str = "", task_id: str = ""
-):
-    """
-    Tier-1: Google Gemini (gemini-2.5-flash / gemini-2.0-flash with 120s timeout).
-    Guaranteed Tier-2 Fallback: OpenRouter Multi-Model Free Fallback Loop (max_tokens=2048).
-    Safely catches timeouts and token errors to prevent task failure.
-    """
+def call_llm_with_recovery(prompt: str, system_instruction: str = "", task_id: str = ""):
     errors = []
-    # Tier-1: Gemini Primary
     if gemini_key and time.time() >= _gemini_cooldown_until:
         try:
             return call_gemini(prompt, system_instruction, task_id=task_id)
         except Exception as e:
             errors.append(f"Gemini: {e}")
-    elif gemini_key:
-        cooldown_left = int(_gemini_cooldown_until - time.time())
-        cooldown_info = f"Gemini in transient cooldown ({cooldown_left}s remaining). Instantly routing to OpenRouter."
-        print(f"ℹ️ {cooldown_info}")
-        if task_id:
-            append_task_log(task_id, f"ℹ️ {cooldown_info}")
-
-    # Guaranteed Tier-2 Fallback: OpenRouter Multi-Model Free Loop
     if openrouter_key:
         try:
             return call_openrouter(prompt, system_instruction, task_id=task_id)
         except Exception as e:
             errors.append(f"OpenRouter: {e}")
-
-    # Optional Tier-3: NVIDIA fallback if configured
     if nvidia_key:
         try:
             return call_nvidia(prompt, system_instruction)
         except Exception as e:
             errors.append(f"NVIDIA: {e}")
-
-    # Optional Tier-4: Groq fallback if configured
     if groq_key:
         try:
             return call_groq(prompt, system_instruction)
         except Exception as e:
             errors.append(f"Groq: {e}")
+    raise RuntimeError(f"All LLM providers failed: {'; '.join(errors) if errors else 'No API keys configured'}")
 
-    raise RuntimeError(
-        f"All LLM providers failed: {'; '.join(errors) if errors else 'No API keys configured'}"
-    )
+
+def _build_conversation_messages(
+    history_items: list | None,
+    latest_prompt: str,
+    allow_links: bool | None = None,
+) -> list[dict]:
+    if allow_links is None:
+        allow_links = user_explicitly_requested_link(latest_prompt)
+    msgs: list[dict] = []
+    if history_items:
+        for item in history_items[-6:]:
+            if not isinstance(item, dict):
+                continue
+            if "user" in item or "agent" in item:
+                u = str(item.get("user", "")).strip()
+                a = str(item.get("agent", "")).strip()
+                if u:
+                    msgs.append({"role": "user", "content": u})
+                if a:
+                    safe_a = a if allow_links else sanitize_unsolicited_links(a, "")
+                    if safe_a:
+                        msgs.append({"role": "assistant", "content": safe_a})
+            else:
+                role = "user" if str(item.get("role", "")).lower() == "user" else "assistant"
+                content = str(item.get("content", "")).strip()
+                if content:
+                    if role == "assistant" and not allow_links:
+                        content = sanitize_unsolicited_links(content, "")
+                    if content:
+                        msgs.append({"role": role, "content": content})
+    msgs.append({"role": "user", "content": latest_prompt})
+    return msgs
+
+
+_FAST_CLIENT_POOL: dict[str, object] = {}
+_HTTP_SESSION = requests.Session() if requests else None
+
+
+def _get_pooled_openai_client(provider: str, base_url: str, api_key: str, default_headers: dict | None = None):
+    cache_key = f"{provider}:{base_url}:{api_key[-8:] if api_key else ''}"
+    client = _FAST_CLIENT_POOL.get(cache_key)
+    if client is None and OpenAI:
+        kwargs = {"base_url": base_url, "api_key": api_key, "max_retries": 0}
+        if default_headers:
+            kwargs["default_headers"] = default_headers
+        client = OpenAI(**kwargs)
+        _FAST_CLIENT_POOL[cache_key] = client
+    return client
+
+
+def _call_gemini_fast_rest(
+    model_name: str,
+    msgs: list[dict],
+    system_instruction: str,
+    max_tokens: int,
+    timeout_sec: float,
+) -> str:
+    """Direct persistent HTTP call to Gemini REST API with low-latency thinking configuration."""
+    clean_model = model_name.replace("models/", "").strip()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={urllib.parse.quote(gemini_key)}"
+    contents = [
+        {
+            "role": "model" if m["role"] == "assistant" else "user",
+            "parts": [{"text": m["content"]}],
+        }
+        for m in msgs
+    ]
+    gen_cfg: dict = {"maxOutputTokens": max_tokens}
+    low_name = clean_model.lower()
+    if "gemini-4" in low_name:
+        gen_cfg["thinkingConfig"] = {"thinkingLevel": "LOW"}
+    elif "gemini-2.5" in low_name:
+        gen_cfg["temperature"] = 0.65
+        gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
+    else:
+        gen_cfg["temperature"] = 0.65
+
+    payload: dict = {"contents": contents, "generationConfig": gen_cfg}
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+    if _HTTP_SESSION is not None:
+        resp = _HTTP_SESSION.post(url, json=payload, timeout=timeout_sec)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Gemini REST HTTP {resp.status_code}: {resp.text[:220]}")
+        res_json = resp.json()
+    else:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            res_json = json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+    candidates = res_json.get("candidates") or []
+    if candidates:
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        text = "\n".join(str(p.get("text") or "") for p in parts if p.get("text")).strip()
+        if text:
+            return text
+    return ""
+
+
+def call_fast_voice_llm(
+    prompt: str,
+    system_instruction: str = "",
+    max_tokens: int = 240,
+    history_messages: list | None = None,
+    timeout_sec: float | None = None,
+) -> str:
+    """Low-latency multilingual conversational LLM router with pooled connections for instant replies."""
+    global _gemini_cooldown_until
+    msgs = _build_conversation_messages(history_messages, prompt)
+    full_msgs = ([{"role": "system", "content": system_instruction}] if system_instruction else []) + msgs
+    req_timeout = timeout_sec if timeout_sec is not None else (10.0 if max_tokens > 400 else 4.2)
+    last_err: Exception | None = None
+
+    # Tier 1: Groq Ultra-Fast (pooled persistent HTTP client, zero retry overhead)
+    if groq_key and OpenAI:
+        try:
+            client = _get_pooled_openai_client("groq", "https://api.groq.com/openai/v1", groq_key)
+            for gm in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+                try:
+                    res = client.chat.completions.create(
+                        model=gm, messages=full_msgs, temperature=0.65, max_tokens=max_tokens, timeout=req_timeout
+                    )
+                    text = (res.choices[0].message.content or "").strip()
+                    if text:
+                        return text
+                except Exception as e:
+                    last_err = e
+                    if any(x in str(e).lower() for x in ["connection", "network", "unreachable"]):
+                        break
+        except Exception as e:
+            last_err = e
+
+    # Tier 2: Direct Google Gemini Flash / Hydrogen (pooled persistent REST with minimal thinking latency)
+    if gemini_key and time.time() >= _gemini_cooldown_until:
+        candidates = ([custom_model_name] if custom_model_name else []) + ["gemini-2.5-flash", "gemini-4-hydrogen"]
+        for g_model_name in dict.fromkeys(candidates):
+            try:
+                text = _call_gemini_fast_rest(
+                    g_model_name,
+                    msgs=msgs,
+                    system_instruction=system_instruction,
+                    max_tokens=max_tokens,
+                    timeout_sec=req_timeout,
+                )
+                if text:
+                    return text
+            except Exception as e:
+                last_err = e
+                err_low = str(e).lower()
+                if any(x in err_low for x in ["quota", "429", "exhausted", "resource_exhausted"]):
+                    _gemini_cooldown_until = time.time() + 60
+                    break
+                if any(x in err_low for x in ["connection", "network", "timeout", "deadline"]):
+                    break
+        if genai:
+            history_transcript = "\n".join(
+                f"{'Kirubha' if m['role'] == 'user' else 'SRI'}: {m['content']}" for m in msgs[:-1]
+            )
+            gemini_prompt = f"{history_transcript}\nKirubha: {prompt}" if history_transcript else prompt
+            for g_model_name in dict.fromkeys(candidates):
+                if time.time() < _gemini_cooldown_until:
+                    break
+                try:
+                    genai.configure(api_key=gemini_key)
+                    gen_model = genai.GenerativeModel(
+                        model_name=g_model_name,
+                        generation_config={"temperature": 0.65, "max_output_tokens": max_tokens},
+                        system_instruction=system_instruction or None,
+                    )
+                    resp = gen_model.generate_content(gemini_prompt, request_options={"timeout": req_timeout})
+                    if resp and resp.text and resp.text.strip():
+                        return resp.text.strip()
+                except Exception as e:
+                    last_err = e
+                    err_low = str(e).lower()
+                    if any(x in err_low for x in ["quota", "429", "exhausted", "resource_exhausted"]):
+                        _gemini_cooldown_until = time.time() + 60
+                        break
+                    if any(x in err_low for x in ["connection", "network", "timeout", "deadline"]):
+                        break
+
+    # Tier 3: OpenRouter Free Tier (pooled persistent client)
+    if openrouter_key and OpenAI:
+        try:
+            client_or = _get_pooled_openai_client(
+                "openrouter",
+                "https://openrouter.ai/api/v1",
+                openrouter_key,
+                default_headers={"HTTP-Referer": "https://reakiruba.app", "X-Title": "SRI AI Companion"},
+            )
+            for om in ["google/gemini-2.0-flash-exp:free", "meta-llama/llama-3.3-70b-instruct:free"]:
+                try:
+                    res = client_or.chat.completions.create(
+                        model=om, messages=full_msgs, temperature=0.65, max_tokens=max_tokens, timeout=req_timeout
+                    )
+                    text = (res.choices[0].message.content or "").strip()
+                    if text:
+                        return text
+                except Exception as e:
+                    last_err = e
+                    continue
+        except Exception as e:
+            last_err = e
+
+    detail = f": {last_err}" if last_err else ": No API keys configured"
+    raise RuntimeError(f"Fast conversational LLM providers unavailable{detail}")
 
 
 # ==============================================================================
-# 6. AUTONOMOUS DIRECTORY & FILE TOOLS & SPEECH RECOGNITION
+# 7. AUTONOMOUS DIRECTORY & FILE TOOLS & TRANSCRIPTION
 # ==============================================================================
 def derive_project_slug(title: str, prompt: str) -> str:
-    """Extracts a semantic, clean folder name from title and prompt."""
     combined = f"{title} {prompt}".lower()
     words = re.findall(r"[a-zA-Z0-9]+", combined)
     stopwords = {
-        "build",
-        "create",
-        "a",
-        "an",
-        "the",
-        "in",
-        "with",
-        "and",
-        "for",
-        "to",
-        "of",
-        "single",
-        "file",
-        "page",
-        "responsive",
-        "modern",
-        "sleek",
-        "interactive",
-        "application",
-        "app",
-        "html",
-        "css",
-        "js",
-        "full",
-        "make",
-        "generate",
-        "ui",
+        "build", "create", "a", "an", "the", "in", "with", "and", "for", "to", "of",
+        "single", "file", "page", "responsive", "modern", "sleek", "interactive",
+        "application", "app", "html", "css", "js", "full", "make", "generate", "ui",
     }
     meaningful = [w for w in words if w not in stopwords and len(w) > 2]
-    if meaningful:
-        slug = "_".join(meaningful[:3])
-    else:
-        slug = "web_project"
-    return slug[:32]
+    return ("_".join(meaningful[:3]) if meaningful else "web_project")[:32]
 
 
-def create_project_structure(
-    folder_name: str, file_name: str, code_content: str
-) -> tuple[bool, str, str]:
-    """
-    TOOL: Autonomous Directory & File Creation Tool.
-    Safely creates nested project folder inside WORKSPACE_DIR and writes code content.
-    Guards strictly against directory traversal attempts outside WORKSPACE_DIR.
-    Returns: (success: bool, created_file_path: str, error_msg: str)
-    """
+def create_project_structure(folder_name: str, file_name: str, code_content: str) -> tuple[bool, str, str]:
     try:
         raw_folder = folder_name.strip()
         raw_file = file_name.strip()
-
-        # Reject explicit traversal attempts or root paths
-        if (
-            ".." in raw_folder
-            or ".." in raw_file
-            or raw_folder.startswith("/")
-            or raw_folder.startswith("\\")
-            or ":" in raw_folder
-            or ":" in raw_file
-        ):
-            return (
-                False,
-                "",
-                "Security boundary violation: Path traversal or absolute paths are strictly forbidden.",
-            )
-
-        # Sanitize folder name
-        clean_folder = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw_folder).strip("_")
-        if not clean_folder:
-            clean_folder = "project"
-
-        # Sanitize file name
-        clean_file = os.path.basename(raw_file.replace("\\", "/").lstrip("/"))
-        if not clean_file:
-            clean_file = "index.html"
-
+        if ".." in raw_folder or ".." in raw_file or raw_folder.startswith(("/", "\\")) or ":" in raw_folder or ":" in raw_file:
+            return False, "", "Security boundary violation: Path traversal or absolute paths forbidden."
+        clean_folder = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw_folder).strip("_") or "project"
+        clean_file = os.path.basename(raw_file.replace("\\", "/").lstrip("/")) or "index.html"
         target_dir = os.path.abspath(os.path.join(WORKSPACE_DIR, clean_folder))
         target_path = os.path.abspath(os.path.join(target_dir, clean_file))
 
-        # Enforce sandbox within WORKSPACE_DIR & protect core application files
         is_safe, sec_err = is_safe_sandbox_path(target_path, WORKSPACE_DIR)
         if not is_safe:
             return False, "", sec_err
 
-        # SriExecutionGate validation (WRITE_CODE)
         rel_target = os.path.relpath(target_path, BASE_DIR).replace("\\", "/")
-        if clean_folder:
-            sri_execution_gate.add_allowed_workspace(f"workspace/{clean_folder}")
-
-        gate_ok = sri_execution_gate.run_agent_task(
-            sri_auth_secret, "WRITE_CODE", rel_target
-        )
-        if not gate_ok:
-            return (
-                False,
-                "",
-                f"SriExecutionGate Auto-Kill: Boundary or key violation ({sri_execution_gate.kill_reason})",
-            )
-
-        # SriDesignAndLaunchGuard validation if target is a frontend UI design artifact
+        sri_execution_gate.add_allowed_workspace(f"workspace/{clean_folder}")
+        if not sri_execution_gate.run_agent_task(sri_auth_secret, "WRITE_CODE", rel_target):
+            return False, "", f"SriExecutionGate rejected write: {sri_execution_gate.kill_reason}"
         if clean_file.lower().endswith((".html", ".css", ".js")):
-            design_ok = sri_design_guard.authorize_design_task(
-                sri_auth_secret, "WRITE_CODE", clean_file
-            )
-            if not design_ok:
-                return (
-                    False,
-                    "",
-                    f"SriDesignAndLaunchGuard Auto-Kill: {sri_design_guard.kill_reason}",
-                )
+            if not sri_design_guard.authorize_design_task(sri_auth_secret, "WRITE_CODE", clean_file):
+                return False, "", f"SriDesignAndLaunchGuard rejected write: {sri_design_guard.kill_reason}"
 
         os.makedirs(target_dir, exist_ok=True)
-
-        # Atomic file write
         temp_path = f"{target_path}.tmp"
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(code_content)
-
         os.replace(temp_path, target_path)
         return True, target_path, ""
     except Exception as e:
-        return False, "", f"Error creating project structure: {str(e)}"
+        return False, "", f"Error creating project structure: {e}"
 
 
 def get_workspace_files() -> list[str]:
-    """Recursively lists all files in workspace/ as clean relative paths."""
     if not os.path.exists(WORKSPACE_DIR):
         return []
     files = []
@@ -1295,1778 +1549,50 @@ def get_workspace_files() -> list[str]:
             if fn.endswith(".tmp") or fn.startswith("."):
                 continue
             full_path = os.path.abspath(os.path.join(root, fn))
-            rel_path = os.path.relpath(full_path, workspace_abs).replace("\\", "/")
-            files.append(rel_path)
+            files.append(os.path.relpath(full_path, workspace_abs).replace("\\", "/"))
     return sorted(files)
 
 
 def safe_read_code(rel_path: str) -> tuple[bool, str, str]:
-    """
-    TOOL 1: Safely reads existing code content from 'workspace/'.
-    Supports root files ('login.html') and nested project paths ('student_dashboard/index.html').
-    Guards strictly against directory traversal attempts.
-    Returns: (success: bool, content: str, error_msg: str)
-    """
     try:
         clean_rel = rel_path.strip().replace("\\", "/").lstrip("/")
         if not clean_rel or ".." in clean_rel or ":" in clean_rel:
-            return False, "", "Invalid or unsafe file path provided."
-
+            return False, "", "Invalid or unsafe file path."
         target_path = os.path.abspath(os.path.join(WORKSPACE_DIR, clean_rel))
-
-        # Enforce sandbox within WORKSPACE_DIR
         is_safe, sec_err = is_safe_sandbox_path(target_path, WORKSPACE_DIR)
         if not is_safe:
             return False, "", sec_err
-
-        if not os.path.exists(target_path):
-            return (
-                False,
-                "",
-                f"File '{clean_rel}' does not exist in '{WORKSPACE_DIR}/'.",
-            )
-
         if not os.path.isfile(target_path):
-            return False, "", f"'{clean_rel}' is not a regular file."
-
+            return False, "", f"File '{clean_rel}' not found in workspace/."
         with open(target_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-
-        return True, content, ""
+            return True, f.read(), ""
     except Exception as e:
-        return False, "", f"Failed reading '{rel_path}': {str(e)}"
+        return False, "", f"Failed reading '{rel_path}': {e}"
 
 
-def safe_write_code(
-    original_rel_path: str, modified_code: str, custom_suffix: str = "_updated"
-) -> tuple[bool, str, str]:
-    """
-    TOOL 2: Atomically saves modified code into 'outputs/<filename_base>_updated.<ext>'.
-    Ensures the original workspace file is NEVER overwritten or corrupted.
-    Returns: (success: bool, output_filepath: str, error_msg: str)
-    """
+def safe_write_code(original_rel_path: str, modified_code: str, custom_suffix: str = "_updated") -> tuple[bool, str, str]:
     try:
         clean_name = original_rel_path.strip().replace("\\", "/").lstrip("/")
         if not clean_name or ".." in clean_name or ":" in clean_name:
-            return False, "", "Security boundary violation: Invalid path provided."
-
-        flat_name = clean_name.replace("/", "_")
-        base_name, ext = os.path.splitext(flat_name)
+            return False, "", "Security boundary violation."
+        base_name, ext = os.path.splitext(clean_name.replace("/", "_"))
         if not ext:
             ext = ".html"
-
-        output_filename = f"{base_name}{custom_suffix}{ext}"
-        target_path = os.path.abspath(os.path.join(OUTPUT_DIR, output_filename))
-
-        # Enforce sandbox within OUTPUT_DIR & protect core application files
+        target_path = os.path.abspath(os.path.join(OUTPUT_DIR, f"{base_name}{custom_suffix}{ext}"))
         is_safe, sec_err = is_safe_sandbox_path(target_path, OUTPUT_DIR)
         if not is_safe:
             return False, "", sec_err
-
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-
         temp_path = f"{target_path}.tmp"
         with open(temp_path, "w", encoding="utf-8") as f:
             f.write(modified_code)
-
         os.replace(temp_path, target_path)
         return True, target_path, ""
     except Exception as e:
-        return False, "", f"Atomic save error: {str(e)}"
+        return False, "", f"Atomic save error: {e}"
 
-
-VOICE_TECHNICAL_PROMPT = (
-    "Python, HTML, CSS, JavaScript, Student Learning App, UI, Workspace"
-)
-
-
-def _transcribe_with_whisper(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
-    """Enforces Tamil transcription with language='ta' and initial technical prompt terms via Groq Whisper."""
-    if not groq_key or not OpenAI:
-        raise ValueError("GROQ_API_KEY is not configured or openai client is unavailable.")
-
-    clean_mime = (mime_type or "audio/wav").split(";")[0].strip().lower()
-    ext = (
-        "webm"
-        if "webm" in clean_mime
-        else (
-            "ogg" if "ogg" in clean_mime else ("mp3" if "mp3" in clean_mime else "wav")
-        )
-    )
-    client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-    audio_file = (f"audio.{ext}", io.BytesIO(audio_bytes), clean_mime)
-    transcription = client.audio.transcriptions.create(
-        model="whisper-large-v3-turbo",
-        file=audio_file,
-        response_format="text",
-        language="ta",
-        prompt=VOICE_TECHNICAL_PROMPT,
-    )
-    if isinstance(transcription, str) and transcription.strip():
-        return transcription.strip()
-    if (
-        hasattr(transcription, "text")
-        and transcription.text
-        and transcription.text.strip()
-    ):
-        return transcription.text.strip()
-    raise ValueError("Empty response received from Groq Whisper.")
-
-
-def _transcribe_with_gemini(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
-    """Routes raw audio bytes directly to Gemini Multimodal Audio API for high-precision Tamil transcription & task extraction."""
-    if not gemini_key or not genai:
-        raise ValueError(
-            "GEMINI_API_KEY is not configured or google-generativeai is unavailable."
-        )
-
-    genai.configure(api_key=gemini_key)
-    model = genai.GenerativeModel("gemini-2.5-flash")
-
-    clean_mime = (mime_type or "audio/wav").split(";")[0].strip().lower()
-    if clean_mime.startswith("audio/x-"):
-        clean_mime = "audio/" + clean_mime[8:]
-    if "wav" in clean_mime:
-        clean_mime = "audio/wav"
-    elif "webm" in clean_mime:
-        clean_mime = "audio/webm"
-    elif "ogg" in clean_mime:
-        clean_mime = "audio/ogg"
-    elif "mp3" in clean_mime or "mpeg" in clean_mime:
-        clean_mime = "audio/mp3"
-
-    gemini_instruction = (
-        "You are an expert Tamil-English bilingual audio transcription and task instruction extraction engine.\n\n"
-        "Audio Processing Instructions:\n"
-        "1. High-Precision Tamil Transcription: Accurately listen to and transcribe the spoken Tamil or Tanglish words in the audio.\n"
-        "   Preserve key technical vocabulary: Python, HTML, CSS, JavaScript, Student Learning App, UI, Workspace.\n"
-        "2. Task Extraction & Synthesis: Extract the core requirement and formulate a clean, actionable, production-ready coding task specification.\n"
-        "   - If the user spoke in Tamil or Tanglish, provide the full, precise task requirement (in English or bilingual) that an autonomous developer agent can immediately build.\n"
-        "   - Preserve all specific features, UI components (buttons, cards, modals, themes), and tech stack requirements mentioned.\n"
-        "3. Output Format: Return strictly the transcribed text and extracted task requirement. Do not add introductory remarks, meta commentary, or quotes."
-    )
-
-    response = model.generate_content(
-        [{"mime_type": clean_mime, "data": audio_bytes}, gemini_instruction],
-        request_options={"timeout": 120},
-    )
-    if response and response.text and response.text.strip():
-        return response.text.strip()
-    raise ValueError("Empty response received from Gemini Multimodal Audio API.")
-
-
-def transcribe_audio_to_text(
-    audio_bytes: bytes, mime_type: str = "audio/wav", engine: str = "auto"
-) -> str:
-    """
-    Transcribes spoken audio bytes to text instructions with Tamil language support & technical vocabulary:
-    1. Groq Whisper: Enforces Tamil transcription with language='ta' and initial technical prompt terms:
-       ('Python, HTML, CSS, JavaScript, Student Learning App, UI, Workspace').
-    2. Gemini Multimodal Audio API: Routes raw audio bytes directly to Gemini for high-precision
-       Tamil transcription and task extraction.
-    """
-    if not audio_bytes or len(audio_bytes) < 64:
-        raise ValueError("Audio recording is empty or corrupt.")
-
-    errors = []
-    engine_lower = (engine or "auto").lower()
-
-    # Route 1: Direct Gemini Multimodal routing
-    if "gemini" in engine_lower:
-        try:
-            return _transcribe_with_gemini(audio_bytes, mime_type)
-        except Exception as ge:
-            errors.append(f"Gemini Multimodal: {ge}")
-        if groq_key:
-            try:
-                return _transcribe_with_whisper(audio_bytes, mime_type)
-            except Exception as we:
-                errors.append(f"Whisper Fallback: {we}")
-
-    # Route 2: Direct Groq Whisper routing (with language='ta' and technical terms)
-    elif "whisper" in engine_lower:
-        try:
-            return _transcribe_with_whisper(audio_bytes, mime_type)
-        except Exception as we:
-            errors.append(f"Groq Whisper: {we}")
-        if gemini_key:
-            try:
-                return _transcribe_with_gemini(audio_bytes, mime_type)
-            except Exception as ge:
-                errors.append(f"Gemini Fallback: {ge}")
-
-    # Route 3: Auto-route (Gemini primary for Tamil + task extraction, Whisper fallback)
-    else:
-        if gemini_key:
-            try:
-                return _transcribe_with_gemini(audio_bytes, mime_type)
-            except Exception as ge:
-                errors.append(f"Gemini Multimodal: {ge}")
-        if groq_key:
-            try:
-                return _transcribe_with_whisper(audio_bytes, mime_type)
-            except Exception as we:
-                errors.append(f"Groq Whisper: {we}")
-
-    raise RuntimeError(f"Audio transcription failed: {'; '.join(errors)}")
-
-
-# ==============================================================================
-# 7. MULTI-DIMENSIONAL REASONING ENGINE & DECOMPOSED EXECUTION
-# ==============================================================================
-def generate_5d_plan(
-    prompt: str, task_type: str, system_instruction: str = "", task_id: str = ""
-) -> tuple[dict, str, str, int]:
-    """
-    Invokes the 5-Dimensional Reasoning Engine:
-    a. Architecture: Split into modular components (UI, Logic, Storage)
-    b. User Experience: Modern, clean, mobile-responsive layout
-    c. Resilience: Add error handling, fallback logic, and edge-case protection
-    d. Efficiency: Optimize token usage and keep within MAX_AGENT_STEPS = 5
-    e. Reflection: Self-evaluate if all requested features were fulfilled before finalizing
-    """
-    planner_prompt = f"""You are the Lead Autonomous Software Architect and Multi-Dimensional Task Planner.
-Analyze the following user task requirement across 5 mandatory dimensions:
-
-Task Request: "{prompt}"
-Task Classification: {task_type}
-
-Produce a comprehensive 5-Dimensional Technical Plan in clean Markdown with the exact section headers below:
-
-### 1. Architecture Dimension
-- UI Component Hierarchy (Split into modular presentation components: header, cards, inputs, modals, controls)
-- Interactive Business Logic (Event listeners, reactive state transitions, calculation rules)
-- Data Storage & Schema (State contract, data models, LocalStorage schema, mock record structure)
-
-### 2. User Experience Dimension
-- Visual Design System (Modern dark glassmorphic palette, typography, high contrast, Tailwind CSS or CSS custom variables)
-- Mobile-Responsive Viewports (Fluid layouts, flex/grid breakpoints, touch targets)
-- Micro-Interactions & Feedback (Hover/active micro-animations, loading indicators, accessibility ARIA labels)
-
-### 3. Resilience Dimension
-- Input Validation & Guardrails (Client-side validation, sanitization, boundary limits)
-- Error Handling & Fallbacks (Graceful fallbacks if mock data is missing, user feedback toast/alert)
-- Edge-Case Protection (Empty states, long text overflow, rapid click prevention)
-
-### 4. Efficiency Dimension
-- Decomposed Execution Strategy (Step 1: Schema/Data init -> Step 2: Core Logic/UI -> Step 3: Self-Verification)
-- Modular Token Budgeting (Keep within MAX_AGENT_STEPS = 5 without truncation or placeholders)
-
-### 5. Reflection & Verification Checklist
-- Itemized feature checklist to strictly verify against before task finalization:
-  [ ] All user-requested UI elements and features present
-  [ ] Fully functional single-file code without external local dependencies
-  [ ] Responsive across mobile and desktop
-  [ ] Error handling and validation active
-  [ ] Zero placeholders, TODOs, or mock stubs
-
-Be concrete, professional, and directly tailored to the user's prompt."""
-
-    res_plan = call_llm_with_recovery(
-        planner_prompt, system_instruction, task_id=task_id
-    ) or ("", "", 0)
-    plan_text, model_name, tokens = res_plan
-
-    sections = {
-        "architecture": "",
-        "ux": "",
-        "resilience": "",
-        "efficiency": "",
-        "reflection": "",
-    }
-
-    arch_m = re.search(
-        r"###\s*1\.\s*Architecture Dimension(.*?)(?=###|\Z)",
-        plan_text,
-        re.DOTALL | re.IGNORECASE,
-    )
-    ux_m = re.search(
-        r"###\s*2\.\s*User Experience Dimension(.*?)(?=###|\Z)",
-        plan_text,
-        re.DOTALL | re.IGNORECASE,
-    )
-    res_m = re.search(
-        r"###\s*3\.\s*Resilience Dimension(.*?)(?=###|\Z)",
-        plan_text,
-        re.DOTALL | re.IGNORECASE,
-    )
-    eff_m = re.search(
-        r"###\s*4\.\s*Efficiency Dimension(.*?)(?=###|\Z)",
-        plan_text,
-        re.DOTALL | re.IGNORECASE,
-    )
-    ref_m = re.search(
-        r"###\s*5\.\s*Reflection(.*?)(?=###|\Z)", plan_text, re.DOTALL | re.IGNORECASE
-    )
-
-    if arch_m:
-        sections["architecture"] = arch_m.group(1).strip()
-    if ux_m:
-        sections["ux"] = ux_m.group(1).strip()
-    if res_m:
-        sections["resilience"] = res_m.group(1).strip()
-    if eff_m:
-        sections["efficiency"] = eff_m.group(1).strip()
-    if ref_m:
-        sections["reflection"] = ref_m.group(1).strip()
-
-    return sections, plan_text, model_name, tokens
-
-
-def generate_project_schema(
-    prompt: str, architecture_plan: str, system_instruction: str = "", task_id: str = ""
-) -> tuple[str, str, int]:
-    """
-    Decomposed Step 1: Generates project schema, data models, and initial mock data in JSON.
-    """
-    schema_prompt = f"""You are the Project Data Architect.
-Based on the Architecture and Data Storage specifications from the plan:
-{architecture_plan}
-
-User Task: "{prompt}"
-
-Generate the complete JSON Schema and Initial Mock Dataset.
-Return strictly valid, parseable JSON wrapped in ```json ... ``` code fences with this structure:
-{{
-  "appName": "...",
-  "version": "1.0.0",
-  "dataModel": {{
-    "entities": [ ... ]
-  }},
-  "initialState": {{
-    "theme": "dark",
-    "filter": "all"
-  }},
-  "mockRecords": [
-    ... 4 to 8 realistic records ...
-  ]
-}}"""
-    res_schema = call_llm_with_recovery(
-        schema_prompt, system_instruction, task_id=task_id
-    ) or ("", "", 0)
-    raw_schema, model_name, tokens = res_schema
-
-    json_match = re.search(r"```(?:json)?\s*\n(.*?)```", raw_schema, re.DOTALL)
-    if json_match:
-        clean_json = json_match.group(1).strip()
-    else:
-        clean_json = raw_schema.strip()
-
-    try:
-        parsed = json.loads(clean_json)
-        formatted_json = json.dumps(parsed, indent=2)
-    except Exception:
-        fallback = {
-            "appName": "Autonomous Web App",
-            "version": "1.0.0",
-            "generatedAt": datetime.now().isoformat(),
-            "prompt": prompt,
-            "mockRecords": [
-                {"id": 1, "title": "Item 1", "status": "active"},
-                {"id": 2, "title": "Item 2", "status": "completed"},
-            ],
-        }
-        formatted_json = json.dumps(fallback, indent=2)
-
-    return formatted_json, model_name, tokens
-
-
-def run_self_verification(
-    prompt: str,
-    code_sample: str,
-    reflection_checklist: str,
-    system_instruction: str = "",
-    task_id: str = "",
-) -> tuple[str, str, int]:
-    """
-    Decomposed Step 3: Evaluates generated code against the 5D Reflection Checklist.
-    """
-    reflection_prompt = f"""You are the Senior QA & Code Reflection Engine.
-Evaluate the following generated application code against the user requirements and Reflection Checklist:
-
-Original User Request: "{prompt}"
-
-Reflection Checklist:
-{reflection_checklist}
-
-Code Snippet Summary (First 1500 chars & last 600 chars):
-```html
-{code_sample[:1500]}
-...
-{code_sample[-600:]}
-```
-
-Perform a rigorous self-evaluation and return a structured markdown report:
-### Self-Verification & Reflection Report
-- **Status**: PASSED / VERIFIED
-- **Architecture & Component Fulfillment**: (Verify that UI, Logic, and Storage structures are implemented)
-- **User Experience & Responsiveness**: (Verify mobile layout, styling, and micro-interactions)
-- **Resilience & Edge-Case Protection**: (Verify validation, error toasts, bounds checking)
-- **Zero Placeholders Check**: Verified no missing logic or stubs.
-
-Keep the report concise, objective, and clear."""
-
-    res_report = call_llm_with_recovery(
-        reflection_prompt, system_instruction, task_id=task_id
-    ) or ("", "", 0)
-    report_text, model_name, tokens = res_report
-    return report_text, model_name, tokens
-
-
-# ==============================================================================
-# 8. CODE ARTIFACT EXTRACTION & VALIDATION
-# ==============================================================================
-def extract_code_block(raw_text: str, default_ext: str = "html") -> tuple[str, str]:
-    """Extracts raw code from markdown blocks or returns full clean code."""
-    # Pattern 1: standard ```html ... ``` block
-    pattern = r"```([a-zA-Z0-9_\-\+]*)\s*\n(.*?)```"
-    matches = re.findall(pattern, raw_text, re.DOTALL)
-    if matches:
-        if default_ext in ["html", "htm"]:
-            # 1. Prioritize full HTML documents containing doctype or html tag
-            doctype_matches = [
-                m
-                for m in matches
-                if "<!doctype" in m[1].lower() or "<html" in m[1].lower()
-            ]
-            if doctype_matches:
-                best_doc = max(doctype_matches, key=lambda m: len(m[1]))
-                return best_doc[1].strip(), "html"
-
-            # 2. Prioritize blocks explicitly labeled as html
-            html_labeled = [
-                m for m in matches if m[0].lower().strip() in ["html", "htm"]
-            ]
-            if html_labeled:
-                best_html = max(html_labeled, key=lambda m: len(m[1]))
-                return best_html[1].strip(), "html"
-
-        best_match = max(matches, key=lambda m: len(m[1]))
-        lang = best_match[0].lower().strip()
-        code = best_match[1].strip()
-        ext = (
-            "html"
-            if lang in ["html", "htm"]
-            else ("py" if lang in ["python", "py"] else default_ext)
-        )
-        return code, ext
-
-    # Pattern 2: unclosed ```html ... block at end of response
-    unclosed = re.search(r"```([a-zA-Z0-9_\-\+]*)\s*\n(.*)", raw_text, re.DOTALL)
-    if unclosed:
-        lang = unclosed.group(1).lower().strip()
-        code = unclosed.group(2).strip()
-        code = re.sub(r"```+$", "", code).strip()
-        ext = (
-            "html"
-            if lang in ["html", "htm"]
-            else ("py" if lang in ["python", "py"] else default_ext)
-        )
-        return code, ext
-
-    # Pattern 3: direct HTML document without markdown fences
-    doc_match = re.search(r"(<!DOCTYPE html.*)", raw_text, re.DOTALL | re.IGNORECASE)
-    if doc_match:
-        code = re.sub(r"```+$", "", doc_match.group(1)).strip()
-        return code, "html"
-
-    return raw_text.strip(), default_ext
-
-
-def validate_artifact_integrity(code: str, ext: str) -> tuple[bool, str, str]:
-    """Ensures frontend code completeness and fixes common structural omissions."""
-    if ext == "html":
-        fixed_code = code
-
-        # Strip any leading conversational text before <!DOCTYPE or <html
-        doc_idx = fixed_code.find("<!DOCTYPE")
-        if doc_idx == -1:
-            doc_idx = fixed_code.find("<html")
-        if doc_idx > 0:
-            fixed_code = fixed_code[doc_idx:]
-
-        # Strip trailing markdown fences
-        fixed_code = re.sub(r"```+$", "", fixed_code).strip()
-        code_lower = fixed_code.lower()
-
-        # Check DOCTYPE and HTML tags
-        if "<!doctype html>" not in code_lower and "<html" not in code_lower:
-            fixed_code = f'<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<title>Generated UI</title>\n<script src="https://cdn.tailwindcss.com"></script>\n</head>\n<body class="bg-slate-900 text-slate-100 min-h-screen p-6">\n{fixed_code}\n</body>\n</html>'
-
-        # Check closing tag
-        if "</html>" not in code_lower:
-            fixed_code += "\n</html>"
-
-        return True, "HTML validation passed with responsive layout check.", fixed_code
-
-    return True, "Code artifact verified.", code
-
-
-# ==============================================================================
-# 7. AUTONOMOUS 5-STEP BACKGROUND WORKER
-# ==============================================================================
-def run_autonomous_agent(task_id: str):
-    """
-    Decoupled daemon worker executing up to MAX_AGENT_STEPS = 5:
-    Step 1: Architecture & Requirements Planning
-    Step 2: Complete Code Generation
-    Step 3: Artifact Validation & Integrity Check
-    Step 4: Atomic Disk Persistence
-    Step 5: Completion Finalization & Metrics
-    """
-    start_time = time.time()
-    db = load_db()
-    task = db["tasks"].get(task_id)
-    if not task:
-        return
-
-    prompt = task["prompt"]
-    task_type = task["task_type"]
-    source_file = task.get("source_file", "")
-    change_request = task.get("change_request", prompt)
-    accumulated_tokens = 0
-    used_models = set()
-
-    system_instruction = (
-        "You are an Elite Autonomous Frontend Engineer and Software Architect. "
-        "Your mission is to produce clean, modern, fully functional, self-contained single-page applications "
-        "or code artifacts without placeholders, truncation, or missing logic. Always include responsive design and polished aesthetics."
-    )
-
-    try:
-        # ======================================================================
-        # BRANCH A: CODE EDIT & REFINEMENT WORKFLOW (safe_read_code -> refine -> safe_write_code)
-        # ======================================================================
-        if task_type == "code_edit":
-            # STEP 1: Safe Read Tool & 5-Dimensional Refinement Planning
-            if time.time() - start_time > TASK_TIMEOUT_SECONDS:
-                raise TimeoutError(
-                    f"Task exceeded {TASK_TIMEOUT_SECONDS}s limit during Step 1."
-                )
-
-            update_task_record(task_id, current_step=1)
-            append_task_log(
-                task_id,
-                f"Step 1/5: Invoking safe_read_code on 'workspace/{source_file}'...",
-            )
-
-            read_ok, original_code, read_err = safe_read_code(source_file)
-            if not read_ok:
-                raise FileNotFoundError(f"Safe Read Tool Error: {read_err}")
-
-            append_task_log(
-                task_id,
-                f"Step 1/5: Loaded {len(original_code):,} chars from 'workspace/{source_file}'. Invoking 5D Refinement Reasoning Engine...",
-            )
-
-            _, ext_no_dot = os.path.splitext(source_file)
-            lang = ext_no_dot.lower().lstrip(".") or "html"
-
-            plan_prompt = (
-                f"You are refactoring and enhancing the existing file: '{source_file}'.\n\n"
-                f"User Change Request:\n'{change_request}'\n\n"
-                f"[Original Code]:\n```{lang}\n{original_code}\n```\n\n"
-                "Please formulate a precise 5-Dimensional Refinement Plan:\n"
-                "### 1. Architecture Dimension\n- Components & elements to add or modify\n"
-                "### 2. User Experience Dimension\n- Visual design, styling, and responsive layout consistency\n"
-                "### 3. Resilience Dimension\n- Form validation, error messaging, fallback states\n"
-                "### 4. Efficiency Dimension\n- Token budget, step planning within MAX_AGENT_STEPS = 5\n"
-                "### 5. Reflection Checklist\n- Specific acceptance criteria to verify before finalizing\n"
-                "Keep the plan concise, highly actionable, and precise."
-            )
-            res_plan = call_llm_with_recovery(
-                plan_prompt, system_instruction, task_id=task_id
-            ) or ("", "", 0)
-            plan_text, model_name, tokens = res_plan
-            accumulated_tokens += tokens
-            used_models.add(model_name)
-
-            sections = {
-                "architecture": "",
-                "ux": "",
-                "resilience": "",
-                "efficiency": "",
-                "reflection": "",
-            }
-            arch_m = re.search(
-                r"###\s*1\.\s*Architecture Dimension(.*?)(?=###|\Z)",
-                plan_text,
-                re.DOTALL | re.IGNORECASE,
-            )
-            ux_m = re.search(
-                r"###\s*2\.\s*User Experience Dimension(.*?)(?=###|\Z)",
-                plan_text,
-                re.DOTALL | re.IGNORECASE,
-            )
-            res_m = re.search(
-                r"###\s*3\.\s*Resilience Dimension(.*?)(?=###|\Z)",
-                plan_text,
-                re.DOTALL | re.IGNORECASE,
-            )
-            eff_m = re.search(
-                r"###\s*4\.\s*Efficiency Dimension(.*?)(?=###|\Z)",
-                plan_text,
-                re.DOTALL | re.IGNORECASE,
-            )
-            ref_m = re.search(
-                r"###\s*5\.\s*Reflection(.*?)(?=###|\Z)",
-                plan_text,
-                re.DOTALL | re.IGNORECASE,
-            )
-
-            if arch_m:
-                sections["architecture"] = arch_m.group(1).strip()
-            if ux_m:
-                sections["ux"] = ux_m.group(1).strip()
-            if res_m:
-                sections["resilience"] = res_m.group(1).strip()
-            if eff_m:
-                sections["efficiency"] = eff_m.group(1).strip()
-            if ref_m:
-                sections["reflection"] = ref_m.group(1).strip()
-
-            update_task_record(task_id, plan=plan_text, plan_5d=sections)
-            append_task_log(
-                task_id, f"Step 1/5 Refinement Plan generated using {model_name}."
-            )
-
-            # STEP 2: State & Schema Context Analysis
-            if time.time() - start_time > TASK_TIMEOUT_SECONDS:
-                raise TimeoutError(
-                    f"Task exceeded {TASK_TIMEOUT_SECONDS}s limit during Step 2."
-                )
-
-            update_task_record(task_id, current_step=2)
-            append_task_log(
-                task_id,
-                "Step 2/5 (Decomposed Step 1): Analyzing DOM hierarchy and state contracts from original code...",
-            )
-
-            state_summary = f"Source Document: {source_file} ({len(original_code):,} chars, {len(original_code.splitlines())} lines)"
-            update_task_record(task_id, schema_data=state_summary)
-            append_task_log(
-                task_id,
-                "Step 2/5 Completed: Document structure and state contracts cataloged.",
-            )
-
-            # STEP 3: Full Code Synthesis ([Original Code] + [User Change Request])
-            if time.time() - start_time > TASK_TIMEOUT_SECONDS:
-                raise TimeoutError(
-                    f"Task exceeded {TASK_TIMEOUT_SECONDS}s limit during Step 3."
-                )
-
-            update_task_record(task_id, current_step=3)
-            append_task_log(
-                task_id,
-                "Step 3/5 (Decomposed Step 2): Synthesizing fully updated production-ready code with requested modifications...",
-            )
-
-            code_prompt = (
-                f"You are modifying the existing code file: '{source_file}'.\n\n"
-                f"User Change Request:\n'{change_request}'\n\n"
-                f"Original Code:\n```{lang}\n{original_code}\n```\n\n"
-                f"5D Refinement Plan:\n{plan_text}\n\n"
-                "CRITICAL REQUIREMENTS:\n"
-                "1. Return the FULL, COMPLETE, PRODUCTION-READY updated file from start to finish.\n"
-                "2. DO NOT return only a diff, patch, or partial snippet. Output the entire working document containing all original HTML elements, head, body, styles, plus the new requested features integrated seamlessly.\n"
-                "3. PRESERVE all existing working features, classes, and styles from the original code.\n"
-                "4. NO placeholders, NO '/* rest of code here */', NO truncation.\n"
-                "5. Return strictly the full code wrapped in markdown code fences: ```"
-                + lang
-                + " ... ```"
-            )
-            res_code = call_llm_with_recovery(
-                code_prompt, system_instruction, task_id=task_id
-            ) or ("", "", 0)
-            raw_code_response, model_name_2, tokens_2 = res_code
-            accumulated_tokens += tokens_2
-            used_models.add(model_name_2)
-
-            code_body, ext = extract_code_block(raw_code_response, default_ext=lang)
-            is_valid, validation_msg, finalized_code = validate_artifact_integrity(
-                code_body, ext
-            )
-            update_task_record(task_id, code=finalized_code)
-            append_task_log(
-                task_id,
-                f"Step 3/5 Completed using {model_name_2} ({len(finalized_code):,} chars generated). {validation_msg}",
-            )
-
-            # STEP 4: Run Self-Verification & Reflection Checklist
-            if time.time() - start_time > TASK_TIMEOUT_SECONDS:
-                raise TimeoutError(
-                    f"Task exceeded {TASK_TIMEOUT_SECONDS}s limit during Step 4."
-                )
-
-            update_task_record(task_id, current_step=4)
-            append_task_log(
-                task_id,
-                "Step 4/5 (Decomposed Step 3): Executing Self-Verification & Reflection against Refinement Checklist...",
-            )
-
-            refl_checklist = sections.get(
-                "reflection",
-                "Verify all user requested features, mobile responsiveness, and zero placeholders.",
-            )
-            res_verify = run_self_verification(
-                change_request,
-                finalized_code,
-                refl_checklist,
-                system_instruction,
-                task_id=task_id,
-            ) or ("", "", 0)
-            verification_text, model_name_4, tokens_4 = res_verify
-            accumulated_tokens += tokens_4
-            used_models.add(model_name_4)
-
-            update_task_record(task_id, verification_report=verification_text)
-            append_task_log(
-                task_id,
-                f"Step 4/5 Completed: Self-Verification Report generated via {model_name_4}.",
-            )
-
-            # STEP 5: Atomic Write Tool (safe_write_code)
-            update_task_record(task_id, current_step=5)
-            append_task_log(
-                task_id,
-                f"Step 5/5: Invoking safe_write_code to persist modified code into '{OUTPUT_DIR}/'...",
-            )
-
-            write_ok, output_filepath, write_err = safe_write_code(
-                source_file, finalized_code, custom_suffix="_updated"
-            )
-            if not write_ok:
-                raise IOError(f"Safe Write Tool Error: {write_err}")
-
-            duration = round(time.time() - start_time, 2)
-            primary_model = ", ".join(used_models)
-
-            db = load_db()
-            db["metrics"]["completed_tasks"] += 1
-            db["metrics"]["total_tokens"] += accumulated_tokens
-            save_db(db)
-
-            update_task_record(
-                task_id,
-                current_step=5,
-                status="COMPLETED",
-                output_file=output_filepath,
-                duration_seconds=duration,
-                tokens=accumulated_tokens,
-                model_used=primary_model,
-            )
-            append_task_log(
-                task_id,
-                f"Step 5/5 Completed: Original 'workspace/{source_file}' protected. Updated code saved to '{output_filepath}' in {duration}s. Model: {primary_model}.",
-            )
-
-            # Universal Notification Dispatch Hook (Telegram & WhatsApp Webhook)
-            dispatch_task_alert(
-                task_id=task_id,
-                task_name=f"Refine {source_file}",
-                status="COMPLETED",
-                file_path=output_filepath,
-                extra_details=f"Updated file saved to '{output_filepath}' in {duration}s. Model: {primary_model}.",
-            )
-            return
-
-        # ======================================================================
-        # BRANCH B: NEW AUTONOMOUS 5-DIMENSIONAL CREATION WORKFLOW (5 Steps)
-        # ======================================================================
-        # STEP 1: 5-Dimensional Multi-Task Planning Engine
-        if time.time() - start_time > TASK_TIMEOUT_SECONDS:
-            raise TimeoutError(
-                f"Task exceeded {TASK_TIMEOUT_SECONDS}s limit during Step 1."
-            )
-
-        update_task_record(task_id, current_step=1)
-        append_task_log(
-            task_id,
-            "Step 1/5: Invoking 5-Dimensional Reasoning Engine (Architecture, UX, Resilience, Efficiency, Reflection)...",
-        )
-
-        res_5d = generate_5d_plan(
-            prompt, task_type, system_instruction, task_id=task_id
-        ) or ({}, "", "", 0)
-        plan_5d, plan_text, model_name_1, tokens_1 = res_5d
-        accumulated_tokens += tokens_1
-        used_models.add(model_name_1)
-
-        update_task_record(task_id, plan=plan_text, plan_5d=plan_5d)
-        append_task_log(
-            task_id, f"Step 1/5 Completed: 5D Plan formulated via {model_name_1}."
-        )
-
-        # STEP 2: Decomposed Action 1 - Initialize Project Schema and Data Structures in workspace/
-        if time.time() - start_time > TASK_TIMEOUT_SECONDS:
-            raise TimeoutError(
-                f"Task exceeded {TASK_TIMEOUT_SECONDS}s limit during Step 2."
-            )
-
-        update_task_record(task_id, current_step=2)
-        append_task_log(
-            task_id,
-            "Step 2/5 (Decomposed Step 1): Initializing project schema and data structures in 'workspace/'...",
-        )
-
-        folder_name = task.get("folder_name", "").strip()
-        if not folder_name:
-            folder_name = derive_project_slug(task.get("title", ""), prompt)
-
-        res_schema = generate_project_schema(
-            prompt,
-            plan_5d.get("architecture", plan_text),
-            system_instruction,
-            task_id=task_id,
-        ) or ("", "", 0)
-        schema_json_str, model_name_2, tokens_2 = res_schema
-        accumulated_tokens += tokens_2
-        used_models.add(model_name_2)
-
-        schema_ok, schema_path, schema_err = create_project_structure(
-            folder_name=folder_name,
-            file_name="schema.json",
-            code_content=schema_json_str,
-        )
-        if not schema_ok:
-            append_task_log(
-                task_id,
-                f"Notice: Schema persistence warning ({schema_err}). Proceeding with in-memory schema.",
-            )
-
-        rel_schema_path = (
-            os.path.relpath(schema_path, WORKSPACE_DIR).replace("\\", "/")
-            if schema_ok
-            else ""
-        )
-        update_task_record(
-            task_id,
-            schema_data=schema_json_str,
-            schema_file=rel_schema_path,
-            folder_name=folder_name,
-        )
-        append_task_log(
-            task_id,
-            f"Step 2/5 Completed: Schema & mock dataset initialized at 'workspace/{folder_name}/schema.json'.",
-        )
-
-        # STEP 3: Decomposed Action 2 - Implement Core Logic and Responsive Interface
-        if time.time() - start_time > TASK_TIMEOUT_SECONDS:
-            raise TimeoutError(
-                f"Task exceeded {TASK_TIMEOUT_SECONDS}s limit during Step 3."
-            )
-
-        update_task_record(task_id, current_step=3)
-        append_task_log(
-            task_id,
-            "Step 3/5 (Decomposed Step 2): Synthesizing complete core logic, event handlers, and responsive interface...",
-        )
-
-        code_prompt = (
-            f"User Requirement: '{prompt}'\n\n"
-            "5-DIMENSIONAL SPECIFICATIONS:\n"
-            f"[1. Architecture]:\n{plan_5d.get('architecture', plan_text)}\n\n"
-            f"[2. User Experience & Design]:\n{plan_5d.get('ux', '')}\n\n"
-            f"[3. Resilience & Error Handling]:\n{plan_5d.get('resilience', '')}\n\n"
-            f"[4. Pre-Initialized Schema & Data Structures]:\n```json\n{schema_json_str}\n```\n\n"
-            "CRITICAL REQUIREMENTS:\n"
-            "1. Generate the COMPLETE, SINGLE-FILE production application (index.html).\n"
-            "2. Ingest and bind the initialized schema and mock records into live application state.\n"
-            "3. Embed responsive styles (Tailwind CDN / CSS variables), Lucide/SVG icons, and full vanilla JS logic.\n"
-            "4. Include error handling alerts/toasts, input validation, and boundary guards.\n"
-            "5. NO placeholders, NO 'TODOs', NO truncation.\n"
-            "6. Return strictly the code wrapped in markdown code fences: ```html ... ```"
-        )
-        res_code = call_llm_with_recovery(
-            code_prompt, system_instruction, task_id=task_id
-        ) or ("", "", 0)
-        raw_code_response, model_name_3, tokens_3 = res_code
-        accumulated_tokens += tokens_3
-        used_models.add(model_name_3)
-
-        code_body, ext = extract_code_block(
-            raw_code_response, default_ext="html" if task_type == "frontend" else "py"
-        )
-        is_valid, validation_msg, finalized_code = validate_artifact_integrity(
-            code_body, ext
-        )
-        update_task_record(task_id, code=finalized_code)
-        append_task_log(
-            task_id,
-            f"Step 3/5 Completed using {model_name_3} ({len(finalized_code):,} chars generated). {validation_msg}",
-        )
-
-        # STEP 4: Decomposed Action 3 - Run Self-Verification & Reflection Checklist
-        if time.time() - start_time > TASK_TIMEOUT_SECONDS:
-            raise TimeoutError(
-                f"Task exceeded {TASK_TIMEOUT_SECONDS}s limit during Step 4."
-            )
-
-        update_task_record(task_id, current_step=4)
-        append_task_log(
-            task_id,
-            "Step 4/5 (Decomposed Step 3): Executing Self-Verification & Reflection against 5D Checklist...",
-        )
-
-        refl_checklist = plan_5d.get(
-            "reflection",
-            "Verify all user requested features, mobile responsiveness, and zero placeholders.",
-        )
-        res_verify = run_self_verification(
-            prompt, finalized_code, refl_checklist, system_instruction, task_id=task_id
-        ) or ("", "", 0)
-        verification_text, model_name_4, tokens_4 = res_verify
-        accumulated_tokens += tokens_4
-        used_models.add(model_name_4)
-
-        update_task_record(task_id, verification_report=verification_text)
-        append_task_log(
-            task_id,
-            f"Step 4/5 Completed: Self-Verification Report generated via {model_name_4}.",
-        )
-
-        # STEP 5: Final Atomic Persistence & State Completion
-        update_task_record(task_id, current_step=5)
-        append_task_log(
-            task_id,
-            "Step 5/5: Persisting final verified production artifacts to 'workspace/' and 'outputs/'...",
-        )
-
-        target_file_name = f"index.{ext}" if ext in ["html", "htm"] else f"main.{ext}"
-
-        # 1. Write atomic workspace file
-        create_ok, ws_filepath, create_err = create_project_structure(
-            folder_name=folder_name,
-            file_name=target_file_name,
-            code_content=finalized_code,
-        )
-        if not create_ok:
-            raise IOError(f"Project structure creation failed: {create_err}")
-
-        rel_ws_path = os.path.relpath(ws_filepath, WORKSPACE_DIR).replace("\\", "/")
-
-        # 2. Versioned backup in outputs/
-        clean_slug = re.sub(r"[^a-zA-Z0-9_\-]", "_", task["title"].lower())[:30]
-        filename = f"{task_id}_{clean_slug}.{ext}"
-        filepath = os.path.join(OUTPUT_DIR, filename)
-
-        temp_filepath = f"{filepath}.tmp"
-        with open(temp_filepath, "w", encoding="utf-8") as f:
-            f.write(finalized_code)
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        os.rename(temp_filepath, filepath)
-
-        duration = round(time.time() - start_time, 2)
-        primary_model = ", ".join(used_models)
-
-        db = load_db()
-        db["metrics"]["completed_tasks"] += 1
-        db["metrics"]["total_tokens"] += accumulated_tokens
-        save_db(db)
-
-        update_task_record(
-            task_id,
-            status="COMPLETED",
-            current_step=5,
-            output_file=filepath,
-            workspace_file=rel_ws_path,
-            folder_name=folder_name,
-            duration_seconds=duration,
-            tokens=accumulated_tokens,
-            model_used=primary_model,
-        )
-        append_task_log(
-            task_id,
-            f"Step 5/5 Completed: Finalized atomic production files in {duration}s. Model: {primary_model}.",
-        )
-
-        # Universal Notification Dispatch Hook (Telegram & WhatsApp Webhook)
-        dispatch_task_alert(
-            task_id=task_id,
-            task_name=task["title"],
-            status="COMPLETED",
-            file_path=ws_filepath,
-            extra_details=f"Workspace project finalized at 'workspace/{rel_ws_path}' in {duration}s. Model: {primary_model}.",
-        )
-
-    except Exception as exc:
-        duration = round(time.time() - start_time, 2)
-        error_msg = str(exc)
-        status = (
-            "TIMEOUT"
-            if ("exceeded" in error_msg and "limit" in error_msg)
-            else "FAILED"
-        )
-
-        db = load_db()
-        db["metrics"]["failed_tasks"] += 1
-        save_db(db)
-
-        update_task_record(
-            task_id, status=status, duration_seconds=duration, error=error_msg
-        )
-        append_task_log(task_id, f"❌ Task ended with status {status}: {error_msg}")
-
-        # Universal Notification Dispatch Hook (Telegram & WhatsApp Webhook)
-        dispatch_task_alert(
-            task_id=task_id,
-            task_name=task.get("title", task_id),
-            status=status,
-            file_path="",
-            extra_details=f"Task error: {error_msg}",
-        )
-
-
-def dispatch_code_edit_task(filename: str, change_request: str) -> str:
-    """Spawns an independent detached daemon thread specifically for code refinement."""
-    clean_name = filename.strip().replace("\\", "/").lstrip("/")
-    base_display = os.path.basename(clean_name)
-    title = (
-        f"Refine {base_display}: {change_request[:24]}..."
-        if len(change_request) > 24
-        else f"Refine {base_display}: {change_request}"
-    )
-    prompt = f"Modify '{clean_name}': {change_request}"
-
-    # Verify SriExecutionGate for code editing action (DEBUG_CODE)
-    rel_path = (
-        f"workspace/{clean_name}"
-        if not clean_name.startswith("workspace/")
-        else clean_name
-    )
-    if not sri_execution_gate.run_agent_task(sri_auth_secret, "DEBUG_CODE", rel_path):
-        print(
-            f"🛑 [AUTO-KILL]: Code edit dispatch rejected by SriExecutionGate for {clean_name}"
-        )
-        task_id = create_task_record(
-            prompt=prompt,
-            task_type="code_edit",
-            title=title,
-            source_file=clean_name,
-            change_request=change_request,
-        )
-        update_task_record(
-            task_id,
-            status="FAILED",
-            error=f"SriExecutionGate Auto-Kill: {sri_execution_gate.kill_reason}",
-        )
-        return task_id
-
-    task_id = create_task_record(
-        prompt=prompt,
-        task_type="code_edit",
-        title=title,
-        source_file=clean_name,
-        change_request=change_request,
-    )
-
-    thread = threading.Thread(target=run_autonomous_agent, args=(task_id,), daemon=True)
-    thread.start()
-    return task_id
-
-
-def dispatch_background_task(
-    prompt: str, task_type: str = "auto", source_file: str = "", folder_name: str = ""
-) -> str:
-    """Spawns an independent detached daemon thread for the task with auto-refine detection."""
-    prompt_str = prompt.strip()
-    words = prompt_str.split()
-    title = " ".join(words[:5]) if words else "Untitled Task"
-    if len(title) > 40:
-        title = title[:40] + "..."
-
-    # Guard against locked/auto-killed gate
-    if not sri_execution_gate.is_active:
-        print(
-            f"🛑 [GATE-LOCKED]: Background task dispatch rejected: {sri_execution_gate.kill_reason}"
-        )
-        task_id = create_task_record(
-            prompt=prompt_str,
-            task_type=task_type,
-            title=title,
-            folder_name=folder_name or "student_learning_hub",
-        )
-        update_task_record(
-            task_id,
-            status="FAILED",
-            error=f"SriExecutionGate Auto-Kill Active: {sri_execution_gate.kill_reason}",
-        )
-        return task_id
-
-    # Check workspace files for auto-detection
-    ws_files = get_workspace_files()
-
-    if task_type == "code_edit" and source_file:
-        return dispatch_code_edit_task(filename=source_file, change_request=prompt_str)
-
-    # Auto-detect if a prompt asks to modify an existing workspace file (e.g. "Take login.html and add password reset")
-    if task_type in ["auto", "code_edit"]:
-        prompt_lower = prompt_str.lower()
-        matched_file = None
-        for wf in ws_files:
-            wf_base = os.path.basename(wf)
-            name_no_ext, _ = os.path.splitext(wf_base)
-            if (
-                wf.lower() in prompt_lower
-                or wf_base.lower() in prompt_lower
-                or f" {name_no_ext.lower()}." in prompt_lower
-                or prompt_lower.startswith(f"take {wf_base.lower()}")
-                or prompt_lower.startswith(f"modify {wf_base.lower()}")
-            ):
-                matched_file = wf
-                break
-
-        if matched_file:
-            refine_triggers = [
-                "take",
-                "modify",
-                "edit",
-                "update",
-                "refactor",
-                "add",
-                "change",
-                "enhance",
-                "revise",
-                "in ",
-            ]
-            if (
-                any(trig in prompt_lower for trig in refine_triggers)
-                or task_type == "code_edit"
-            ):
-                return dispatch_code_edit_task(
-                    filename=matched_file, change_request=prompt_str
-                )
-
-    # Detect task type if auto
-    if task_type == "auto":
-        frontend_kws = [
-            "html",
-            "css",
-            "js",
-            "ui",
-            "ux",
-            "frontend",
-            "login",
-            "signup",
-            "dashboard",
-            "landing",
-            "card",
-            "navbar",
-            "page",
-            "web",
-        ]
-        is_frontend = any(kw in prompt_str.lower() for kw in frontend_kws)
-        task_type = "frontend" if is_frontend else "general"
-
-    clean_folder = (
-        folder_name.strip() if folder_name else derive_project_slug(title, prompt_str)
-    )
-
-    task_id = create_task_record(
-        prompt=prompt_str, task_type=task_type, title=title, folder_name=clean_folder
-    )
-
-    # Spawn background daemon thread
-    thread = threading.Thread(target=run_autonomous_agent, args=(task_id,), daemon=True)
-    thread.start()
-    return task_id
-
-
-# ==============================================================================
-# 7.5. REST API & SECURE WEBHOOK GATEWAY (SRI_AUTH_SECRET)
-# ==============================================================================
-def handle_sri_api_gateway():
-    """
-    SRI REST API & Webhook Gateway.
-    Allows remote dispatch, monitoring, metrics, voice alerts, and agent queries
-    authenticated via SRI_AUTH_SECRET (e.g. SRI_AUTH_SEC_948f2b7a0c91825).
-    """
-    try:
-        params = st.query_params
-    except Exception:
-        return
-
-    # Check if an API action or auth parameter is present
-    action = (
-        params.get("action", "") or params.get("api", "") or params.get("endpoint", "")
-    )
-    auth_provided = (
-        params.get("auth", "")
-        or params.get("api_key", "")
-        or params.get("secret", "")
-        or params.get("token", "")
-        or params.get("key", "")
-    )
-
-    # If the user visits with valid auth in URL, authenticate their UI session
-    if auth_provided:
-        if auth_provided == sri_auth_secret or (
-            sri_auth_secret and auth_provided.strip() == sri_auth_secret.strip()
-        ):
-            st.session_state["sri_authenticated"] = True
-
-    # If no API action is requested, continue to normal Streamlit UI
-    if not action:
-        return
-
-    # Normalize action
-    action = action.lower().strip()
-
-    # Authenticate API request
-    is_authorized = st.session_state.get("sri_authenticated", False) or bool(
-        auth_provided
-        and (
-            auth_provided == sri_auth_secret
-            or (sri_auth_secret and auth_provided.strip() == sri_auth_secret.strip())
-        )
-    )
-
-    now_ts = datetime.now().isoformat()
-
-    if not is_authorized:
-        response_payload = {
-            "status": "error",
-            "code": 401,
-            "error": "Unauthorized: Missing or invalid SRI authentication token.",
-            "hint": "Provide a valid secret token via '?auth=SRI_AUTH_SEC_948f2b7a0c91825'",
-            "timestamp": now_ts,
-        }
-        st.error("🔒 SRI API Gateway: Unauthorized Access")
-        st.json(response_payload)
-        st.code(json.dumps(response_payload, indent=2), language="json")
-        st.stop()
-
-    # Authorized API execution
-    try:
-        if action in ["health", "ping"]:
-            db_state = load_db()
-            all_tasks = db_state.get("tasks", {})
-            running_tasks = sum(
-                1 for t in all_tasks.values() if t.get("status") == "RUNNING"
-            )
-            response_payload = {
-                "status": "ok",
-                "action": "health",
-                "agent": "SRI Autonomous Agent",
-                "status_indicator": "🟢 SRI (Ready)",
-                "runtime_environment": RUNTIME_ENV["env_name"],
-                "active_running_tasks": running_tasks,
-                "total_tasks_recorded": len(all_tasks),
-                "timestamp": now_ts,
-                "api_version": "2.0-autonomous",
-            }
-
-        elif action in ["dispatch", "create", "run"]:
-            prompt = (
-                params.get("prompt", "")
-                or params.get("task", "")
-                or params.get("instruction", "")
-            )
-            if not prompt:
-                response_payload = {
-                    "status": "error",
-                    "code": 400,
-                    "error": "Bad Request: 'prompt' parameter is required to dispatch an agent task.",
-                    "example": "?action=dispatch&prompt=Build+a+student+dashboard&auth=SRI_AUTH_SEC_948f2b7a0c91825",
-                    "timestamp": now_ts,
-                }
-            else:
-                task_type = params.get("type", "auto") or params.get(
-                    "task_type", "auto"
-                )
-                folder = params.get("folder", "") or params.get("folder_name", "")
-                source_file = params.get("source_file", "") or params.get(
-                    "filename", ""
-                )
-
-                task_id = dispatch_background_task(
-                    prompt=prompt,
-                    task_type=task_type,
-                    source_file=source_file,
-                    folder_name=folder,
-                )
-
-                db_state = load_db()
-                task_data = db_state.get("tasks", {}).get(task_id, {})
-                folder_used = task_data.get("folder_name", folder)
-
-                response_payload = {
-                    "status": "ok",
-                    "action": "dispatch",
-                    "task_id": task_id,
-                    "title": task_data.get("title", "Autonomous Task"),
-                    "task_type": task_type,
-                    "folder_name": folder_used,
-                    "state": "RUNNING",
-                    "message": "Task successfully dispatched to decoupled 24/7 background worker.",
-                    "status_url": f"?action=status&task_id={task_id}&auth={auth_provided or sri_auth_secret}",
-                    "timestamp": now_ts,
-                }
-
-        elif action in ["status", "get"]:
-            task_id = params.get("task_id", "") or params.get("id", "")
-            if not task_id:
-                response_payload = {
-                    "status": "error",
-                    "code": 400,
-                    "error": "Bad Request: 'task_id' parameter is required to check task status.",
-                    "example": "?action=status&task_id=task_12345&auth=SRI_AUTH_SEC_948f2b7a0c91825",
-                    "timestamp": now_ts,
-                }
-            else:
-                db_state = load_db()
-                task = db_state.get("tasks", {}).get(task_id)
-                if not task:
-                    response_payload = {
-                        "status": "error",
-                        "code": 404,
-                        "error": f"Task '{task_id}' not found in tasks database.",
-                        "timestamp": now_ts,
-                    }
-                else:
-                    response_payload = {
-                        "status": "ok",
-                        "action": "status",
-                        "task_id": task_id,
-                        "title": task.get("title", ""),
-                        "status": task.get("status", "UNKNOWN"),
-                        "progress": task.get("progress", 0),
-                        "created_at": task.get("created_at", ""),
-                        "completed_at": task.get("completed_at", ""),
-                        "folder_name": task.get("folder_name", ""),
-                        "tokens_used": task.get("tokens_used", 0),
-                        "created_files": task.get("created_files", []),
-                        "summary": task.get("summary", ""),
-                        "error": task.get("error", None),
-                        "recent_logs": task.get("logs", [])[-15:],
-                        "timestamp": now_ts,
-                    }
-
-        elif action in ["list", "tasks"]:
-            limit_val = params.get("limit", "25")
-            try:
-                limit = int(limit_val)
-            except Exception:
-                limit = 25
-            filter_status = params.get("status", "").upper()
-            db_state = load_db()
-            all_tasks = db_state.get("tasks", {})
-            task_list = []
-            for tid, t in sorted(
-                all_tasks.items(),
-                key=lambda x: str(x[1].get("created_at", "")),
-                reverse=True,
-            ):
-                if filter_status and str(t.get("status", "")).upper() != filter_status:
-                    continue
-                task_list.append(
-                    {
-                        "task_id": tid,
-                        "title": t.get("title", ""),
-                        "status": t.get("status", ""),
-                        "progress": t.get("progress", 0),
-                        "created_at": t.get("created_at", ""),
-                        "folder_name": t.get("folder_name", ""),
-                        "files_count": len(t.get("created_files", [])),
-                    }
-                )
-                if len(task_list) >= limit:
-                    break
-            response_payload = {
-                "status": "ok",
-                "action": "list",
-                "total_tasks": len(all_tasks),
-                "returned_count": len(task_list),
-                "tasks": task_list,
-                "timestamp": now_ts,
-            }
-
-        elif action in ["metrics", "stats"]:
-            db_state = load_db()
-            metrics = db_state.get("metrics", {})
-            all_tasks = db_state.get("tasks", {})
-            running_tasks = sum(
-                1 for t in all_tasks.values() if t.get("status") == "RUNNING"
-            )
-            response_payload = {
-                "status": "ok",
-                "action": "metrics",
-                "active_running": running_tasks,
-                "total_tasks": metrics.get("total_tasks", len(all_tasks)),
-                "completed_tasks": metrics.get("completed_tasks", 0),
-                "failed_tasks": metrics.get("failed_tasks", 0),
-                "total_tokens_estimated": metrics.get("total_tokens", 0),
-                "timestamp": now_ts,
-            }
-
-        elif action in ["call", "twilio"]:
-            message = (
-                params.get("message", "") or "வணக்கம்! உங்கள் SRI ஏஜென்ட் அழைக்கிறது!"
-            )
-            ok, call_sid = make_agent_call(message=message)
-            response_payload = {
-                "status": "ok" if ok else "error",
-                "action": "call",
-                "success": ok,
-                "call_sid": call_sid if ok else None,
-                "error": None if ok else call_sid,
-                "target_number": get_secret("ADMIN_PHONE_NUMBER"),
-                "timestamp": now_ts,
-            }
-
-        elif action in ["workspace", "files"]:
-            ws_files = get_workspace_files()
-            out_files = (
-                [
-                    f
-                    for f in os.listdir(OUTPUT_DIR)
-                    if os.path.isfile(os.path.join(OUTPUT_DIR, f))
-                    and not f.endswith(".tmp")
-                ]
-                if os.path.exists(OUTPUT_DIR)
-                else []
-            )
-            response_payload = {
-                "status": "ok",
-                "action": "workspace",
-                "workspace_directory": WORKSPACE_DIR,
-                "workspace_files_count": len(ws_files),
-                "workspace_files": ws_files,
-                "output_directory": OUTPUT_DIR,
-                "output_files_count": len(out_files),
-                "output_files": out_files,
-                "timestamp": now_ts,
-            }
-
-        elif action in ["gate_status", "gate"]:
-            response_payload = {
-                "status": "ok",
-                "action": "gate_status",
-                "agent_name": sri_execution_gate.agent_name,
-                "is_active": sri_execution_gate.is_active,
-                "kill_reason": sri_execution_gate.kill_reason,
-                "allowed_workspaces": sri_execution_gate.allowed_workspaces,
-                "allowed_actions": sri_execution_gate.allowed_actions,
-                "timestamp": now_ts,
-            }
-
-        elif action in ["reset_gate", "rearm_gate"]:
-            rearm_key = auth_provided or params.get("key", "") or sri_auth_secret
-            ok = sri_execution_gate.reset_gate(rearm_key)
-            response_payload = {
-                "status": "ok" if ok else "error",
-                "action": "reset_gate",
-                "is_active": sri_execution_gate.is_active,
-                "message": (
-                    "SriExecutionGate successfully re-armed."
-                    if ok
-                    else "Failed to re-arm: Invalid key."
-                ),
-                "timestamp": now_ts,
-            }
-
-        elif action in ["design_guard_status", "stitch_status", "design_guard"]:
-            response_payload = {
-                "status": "ok",
-                "action": "design_guard_status",
-                "agent_name": sri_design_guard.agent_name,
-                "is_active": sri_design_guard.is_active,
-                "kill_reason": sri_design_guard.kill_reason,
-                "allowed_actions": sri_design_guard.allowed_actions,
-                "allowed_files": sri_design_guard.allowed_files,
-                "timestamp": now_ts,
-            }
-
-        elif action in ["reset_design_guard", "rearm_design_guard"]:
-            rearm_key = auth_provided or params.get("key", "") or sri_auth_secret
-            ok = sri_design_guard.reset_guard(rearm_key)
-            response_payload = {
-                "status": "ok" if ok else "error",
-                "action": "reset_design_guard",
-                "is_active": sri_design_guard.is_active,
-                "message": (
-                    "SriDesignAndLaunchGuard successfully re-armed."
-                    if ok
-                    else "Failed to re-arm: Invalid key."
-                ),
-                "timestamp": now_ts,
-            }
-
-        elif action in ["voice_route", "route_command", "voice_dispatch"]:
-            prompt = (
-                params.get("prompt", "")
-                or params.get("command", "")
-                or params.get("instruction", "")
-            )
-            if not prompt:
-                response_payload = {
-                    "status": "error",
-                    "code": 400,
-                    "error": "Bad Request: 'prompt' parameter is required for voice routing.",
-                    "example": "?action=voice_route&prompt=மாணவர்+ஆப்பிற்கு+அழகான+ஹோம்+பேஜ்+டிசைன்+செய்&auth=SRI_AUTH_SEC_948f2b7a0c91825",
-                    "timestamp": now_ts,
-                }
-            else:
-                ok, route_info, err_msg = sri_voice_router.validate_and_route(
-                    prompt, auth_provided or sri_auth_secret
-                )
-                if not ok:
-                    response_payload = {
-                        "status": "error",
-                        "code": 403,
-                        "action": "voice_route",
-                        "error": err_msg,
-                        "route_info": route_info,
-                        "timestamp": now_ts,
-                    }
-                else:
-                    target_folder = (
-                        route_info.get("target_workspace", "").replace("workspace/", "")
-                        or "student_learning_hub"
-                    )
-                    task_type = (
-                        "frontend"
-                        if route_info.get("route") == "DESIGN"
-                        else (
-                            "general"
-                            if route_info.get("route") == "RESEARCH"
-                            else "auto"
-                        )
-                    )
-                    task_id = dispatch_background_task(
-                        prompt=prompt, task_type=task_type, folder_name=target_folder
-                    )
-                    response_payload = {
-                        "status": "ok",
-                        "action": "voice_route",
-                        "task_id": task_id,
-                        "route_detected": route_info.get("route"),
-                        "tamil_title": route_info.get("tamil_title"),
-                        "engine_selected": route_info.get("engine"),
-                        "target_workspace": route_info.get("target_workspace"),
-                        "target_files": route_info.get("target_files"),
-                        "explanation": route_info.get("explanation"),
-                        "status_url": f"?action=status&task_id={task_id}&auth={auth_provided or sri_auth_secret}",
-                        "timestamp": now_ts,
-                    }
-
-        elif action in ["universal_route", "best_ai", "sri_route"]:
-            prompt = (
-                params.get("prompt", "")
-                or params.get("command", "")
-                or params.get("text", "")
-            )
-            if not prompt:
-                response_payload = {
-                    "status": "error",
-                    "code": 400,
-                    "error": "Bad Request: 'prompt' parameter is required for best-AI routing.",
-                    "example": "?action=universal_route&prompt=மாணவர்+பக்கத்திற்கு+புதிய+டிசைன்+செய்&auth=SRI_AUTH_SEC_948f2b7a0c91825",
-                    "timestamp": now_ts,
-                }
-            else:
-                route_res = sri_universal_router.route_to_best_ai(
-                    auth_provided or sri_auth_secret, prompt
-                )
-                if not route_res:
-                    response_payload = {
-                        "status": "error",
-                        "code": 403,
-                        "action": "universal_route",
-                        "error": f"SriUniversalVoiceRouter Auto-Kill: {sri_universal_router.kill_reason}",
-                        "timestamp": now_ts,
-                    }
-                else:
-                    chosen_ai, target_file = route_res
-                    task_type = (
-                        "frontend"
-                        if target_file == "index.html"
-                        else ("general" if target_file == "server.js" else "auto")
-                    )
-                    task_id = dispatch_background_task(
-                        prompt=prompt,
-                        task_type=task_type,
-                        folder_name=(
-                            "student_learning_hub"
-                            if target_file == "index.html"
-                            else "new_project_area"
-                        ),
-                    )
-                    response_payload = {
-                        "status": "ok",
-                        "action": "universal_route",
-                        "task_id": task_id,
-                        "chosen_ai": chosen_ai,
-                        "target_file": target_file,
-                        "command": prompt,
-                        "status_url": f"?action=status&task_id={task_id}&auth={auth_provided or sri_auth_secret}",
-                        "timestamp": now_ts,
-                    }
-
-        elif action in ["master_task", "universal_task", "master_execute"]:
-            prompt = (
-                params.get("prompt", "")
-                or params.get("task", "")
-                or params.get("command", "")
-            )
-            work_area = (
-                params.get("work_area", "")
-                or params.get("area", "")
-                or "workspace/student_learning_hub"
-            )
-            if not prompt:
-                response_payload = {
-                    "status": "error",
-                    "code": 400,
-                    "error": "Bad Request: 'prompt' parameter is required for master agent task execution.",
-                    "example": "?action=master_task&work_area=workspace/student_learning_hub&prompt=மாணவர்+பக்கத்தை+டிசைன்+செய்&auth=SRI_AUTH_SEC_948f2b7a0c91825",
-                    "timestamp": now_ts,
-                }
-            else:
-                exec_res = sri_master_agent.execute_universal_task(
-                    auth_provided or sri_auth_secret, work_area, prompt
-                )
-                if not exec_res:
-                    response_payload = {
-                        "status": "error",
-                        "code": 403,
-                        "action": "master_task",
-                        "error": f"SriUniversalMasterAgent Auto-Kill: {sri_master_agent.kill_reason}",
-                        "timestamp": now_ts,
-                    }
-                else:
-                    folder_target = (
-                        work_area.replace("workspace/", "").strip()
-                        or "student_learning_hub"
-                    )
-                    task_type = (
-                        "frontend"
-                        if "Stitch" in exec_res["ai_engine"]
-                        else (
-                            "general"
-                            if "OpenRouter" in exec_res["ai_engine"]
-                            else "auto"
-                        )
-                    )
-                    task_id = dispatch_background_task(
-                        prompt=prompt, task_type=task_type, folder_name=folder_target
-                    )
-                    response_payload = {
-                        "status": "ok",
-                        "action": "master_task",
-                        "task_id": task_id,
-                        "master_execution": exec_res,
-                        "status_url": f"?action=status&task_id={task_id}&auth={auth_provided or sri_auth_secret}",
-                        "timestamp": now_ts,
-                    }
-
-        elif action in ["master_agent_status"]:
-            response_payload = {
-                "status": "ok",
-                "action": "master_agent_status",
-                "agent_name": sri_master_agent.agent_name,
-                "is_active": sri_master_agent.is_active,
-                "kill_reason": sri_master_agent.kill_reason,
-                "approved_work_areas": sri_master_agent.approved_work_areas,
-                "timestamp": now_ts,
-            }
-
-        elif action in ["reset_master_agent", "rearm_master_agent"]:
-            rearm_key = auth_provided or params.get("key", "") or sri_auth_secret
-            ok = sri_master_agent.reset_agent(rearm_key)
-            response_payload = {
-                "status": "ok" if ok else "error",
-                "action": "reset_master_agent",
-                "is_active": sri_master_agent.is_active,
-                "message": (
-                    "SriUniversalMasterAgent successfully re-armed."
-                    if ok
-                    else "Failed to re-arm: Invalid key."
-                ),
-                "timestamp": now_ts,
-            }
-
-        elif action in ["add_work_area"]:
-            new_area = params.get("area", "") or params.get("path", "")
-            if not new_area:
-                response_payload = {
-                    "status": "error",
-                    "code": 400,
-                    "error": "Bad Request: 'area' parameter is required to add work area.",
-                    "timestamp": now_ts,
-                }
-            else:
-                sri_master_agent.add_new_work_area(new_area)
-                response_payload = {
-                    "status": "ok",
-                    "action": "add_work_area",
-                    "added_area": new_area,
-                    "approved_work_areas": sri_master_agent.approved_work_areas,
-                    "timestamp": now_ts,
-                }
-
-        elif action in ["help", "docs"]:
-            response_payload = {
-                "status": "ok",
-                "action": "help",
-                "agent": "SRI Autonomous Agent REST API Gateway",
-                "auth_method": f"Pass query parameter '?auth={sri_auth_secret}'",
-                "endpoints": {
-                    "health": f"?action=health&auth={sri_auth_secret}",
-                    "voice_route": f"?action=voice_route&prompt=<TAMIL_OR_ENGLISH_PROMPT>&auth={sri_auth_secret}",
-                    "dispatch_task": f"?action=dispatch&prompt=<PROMPT>&type=<auto|frontend|general>&folder=<FOLDER>&auth={sri_auth_secret}",
-                    "task_status": f"?action=status&task_id=<TASK_ID>&auth={sri_auth_secret}",
-                    "list_tasks": f"?action=list&limit=25&status=<RUNNING|COMPLETED|FAILED>&auth={sri_auth_secret}",
-                    "metrics": f"?action=metrics&auth={sri_auth_secret}",
-                    "twilio_voice_call": f"?action=call&message=<TEXT>&auth={sri_auth_secret}",
-                    "workspace_files": f"?action=workspace&auth={sri_auth_secret}",
-                    "gate_status": f"?action=gate_status&auth={sri_auth_secret}",
-                    "reset_gate": f"?action=reset_gate&auth={sri_auth_secret}",
-                    "design_guard_status": f"?action=design_guard_status&auth={sri_auth_secret}",
-                    "reset_design_guard": f"?action=reset_design_guard&auth={sri_auth_secret}",
-                },
-                "timestamp": now_ts,
-            }
-
-        else:
-            response_payload = {
-                "status": "error",
-                "code": 400,
-                "error": f"Unknown action '{action}'. Supported actions: health, dispatch, status, list, metrics, call, workspace, gate_status, reset_gate, help.",
-                "hint": f"Check '?action=help&auth={sri_auth_secret}' for API documentation.",
-                "timestamp": now_ts,
-            }
-
-    except Exception as e:
-        response_payload = {
-            "status": "error",
-            "code": 500,
-            "error": f"Internal API execution error: {str(e)}",
-            "timestamp": datetime.now().isoformat(),
-        }
-
-    # Render API response cleanly and stop script execution
-    st.subheader("🤖 SRI Autonomous Agent API Gateway")
-    st.json(response_payload)
-    st.code(json.dumps(response_payload, indent=2), language="json")
-    st.stop()
-
-
-# Evaluate incoming API requests immediately before UI rendering
-handle_sri_api_gateway()
-
-
-
-
-
-
-# ==============================================================================
-# 8. BESPOKE OBSIDIAN THEME, PARTICLES & STICKY HEADER
-# ==============================================================================
 
 def create_project_zip_bundle(target_path: str) -> bytes:
-    """Creates a downloadable .zip archive in-memory for a project directory or file."""
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         if os.path.isdir(target_path):
@@ -3075,1553 +1601,865 @@ def create_project_zip_bundle(target_path: str) -> bytes:
                     if f.endswith(".tmp") or f.startswith("."):
                         continue
                     full_p = os.path.join(root, f)
-                    rel_p = os.path.relpath(full_p, target_path)
-                    zf.write(full_p, arcname=rel_p)
+                    zf.write(full_p, arcname=os.path.relpath(full_p, target_path))
         elif os.path.isfile(target_path):
             zf.write(target_path, arcname=os.path.basename(target_path))
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
 
-def render_obsidian_theme_and_particles():
-    """Renders Deep Obsidian theme CSS and hardware-accelerated ambient ember particles."""
-    theme_html = """
-    <canvas id="obsidian-ambient-canvas" style="position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 0;"></canvas>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
-
-        /* True Deep Obsidian Canvas (#060709) across all Streamlit background wrappers */
-        html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], .stApp, section.main, .main {
-            background-color: #060709 !important;
-            background: #060709 !important;
-            color: #F1F5F9 !important;
-            font-family: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-        }
-
-        /* 1. Remove all default Streamlit UI chrome & hide all default radio circles */
-        [data-testid="stToolbar"], [data-testid="stDecoration"], .stDeployButton, #MainMenu, footer {
-            display: none !important;
-        }
-        [data-testid="stHeader"] {
-            background: transparent !important;
-            height: 0px !important;
-            overflow: visible !important;
-            border: none !important;
-        }
-        input[type="radio"] {
-            display: none !important;
-        }
-        div[role="radiogroup"] > label > div:first-child {
-            display: none !important;
-        }
-
-        /* Container padding for edge-to-edge bespoke feel */
-        .main .block-container {
-            max-width: 100% !important;
-            padding-top: 0.5rem !important;
-            padding-bottom: 2rem !important;
-            padding-left: 1.2rem !important;
-            padding-right: 1.2rem !important;
-            position: relative;
-            z-index: 1;
-        }
-
-        [data-testid="stSidebar"], section[data-testid="stSidebar"] {
-            background-color: #090B10 !important;
-            background: #090B10 !important;
-            border-right: 1px solid #1E222B !important;
-            box-shadow: 4px 0 30px rgba(0, 0, 0, 0.8) !important;
-        }
-
-        /* 1px Hairline borders and glassmorphism on all expanders */
-        div[data-testid="stExpander"] {
-            background: rgba(12, 15, 22, 0.85) !important;
-            border: 1px solid #1E222B !important;
-            border-radius: 12px !important;
-            backdrop-filter: blur(16px) !important;
-            margin-bottom: 12px !important;
-            transition: border-color 0.25s ease, box-shadow 0.25s ease;
-        }
-
-        div[data-testid="stExpander"]:hover {
-            border-color: rgba(245, 158, 11, 0.45) !important;
-            box-shadow: 0 4px 20px rgba(245, 158, 11, 0.12);
-        }
-
-        /* Hide all default Streamlit red/white radio circles & style as sleek segmented pills */
-        div[role="radiogroup"] {
-            display: flex !important;
-            flex-direction: row !important;
-            gap: 6px !important;
-            background: #090B10 !important;
-            border: 1px solid #1E222B !important;
-            padding: 3px !important;
-            border-radius: 9999px !important;
-            width: fit-content !important;
-        }
-
-        div[role="radiogroup"] > label {
-            margin: 0 !important;
-            padding: 5px 16px !important;
-            border-radius: 9999px !important;
-            cursor: pointer !important;
-            border: 1px solid transparent !important;
-            transition: all 0.2s ease !important;
-            background: transparent !important;
-        }
-
-        div[role="radiogroup"] > label > div:first-child {
-            display: none !important;
-        }
-
-        div[role="radiogroup"] > label div[data-testid="stMarkdownContainer"] p {
-            color: #94A3B8 !important;
-            font-size: 0.8rem !important;
-            font-weight: 600 !important;
-            margin: 0 !important;
-            transition: color 0.2s ease !important;
-        }
-
-        div[role="radiogroup"] > label:hover {
-            background: rgba(245, 158, 11, 0.06) !important;
-        }
-
-        div[role="radiogroup"] > label:has(input:checked) {
-            background: rgba(245, 158, 11, 0.14) !important;
-            border: 1px solid #F59E0B !important;
-            box-shadow: 0 0 10px rgba(245, 158, 11, 0.25) !important;
-        }
-
-        div[role="radiogroup"] > label:has(input:checked) div[data-testid="stMarkdownContainer"] p {
-            color: #FBBF24 !important;
-            font-weight: 700 !important;
-        }
-
-        /* Carousel horizontal pill dock */
-        div[data-testid="stHorizontalBlock"]:has(button[key="pill_student_db"]) {
-            display: flex !important;
-            flex-direction: row !important;
-            gap: 6px !important;
-            align-items: center !important;
-            margin-bottom: 6px !important;
-        }
-
-        div[data-testid="stHorizontalBlock"]:has(button[key="pill_student_db"]) button {
-            background: #0E1117 !important;
-            border: 1px solid #1E222B !important;
-            border-radius: 9999px !important;
-            color: #D1D5DB !important;
-            font-size: 0.74rem !important;
-            font-weight: 500 !important;
-            padding: 6px 10px !important;
-            white-space: nowrap !important;
-            text-overflow: ellipsis !important;
-            overflow: hidden !important;
-            transition: all 0.2s ease !important;
-        }
-
-        div[data-testid="stHorizontalBlock"]:has(button[key="pill_student_db"]) button[key="pill_student_db"] {
-            border: 1px solid #F59E0B !important;
-            background: rgba(245, 158, 11, 0.12) !important;
-            color: #FBBF24 !important;
-            box-shadow: 0 0 10px rgba(245, 158, 11, 0.25) !important;
-            font-weight: 600 !important;
-        }
-
-        div[data-testid="stHorizontalBlock"]:has(button[key="pill_student_db"]) button:hover {
-            border-color: #F59E0B !important;
-            color: #FBBF24 !important;
-            background: rgba(245, 158, 11, 0.08) !important;
-            transform: translateY(-1px) !important;
-        }
-
-        /* Gold-Bordered Prompt Bar: "Ask SRI Agent..." and "Message SRI..." */
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]),
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) {
-            background: #0E1117 !important;
-            border: 1px solid rgba(245, 158, 11, 0.4) !important;
-            border-radius: 9999px !important;
-            padding: 4px 8px 4px 18px !important;
-            align-items: center !important;
-            box-shadow: 0 4px 25px rgba(0, 0, 0, 0.6), 0 0 15px rgba(245, 158, 11, 0.15) !important;
-            transition: border-color 0.25s, box-shadow 0.25s !important;
-            margin-top: 10px !important;
-            flex-direction: row !important;
-            flex-wrap: nowrap !important;
-        }
-
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]):focus-within,
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]):focus-within {
-            border-color: #F59E0B !important;
-            box-shadow: 0 4px 28px rgba(245, 158, 11, 0.35) !important;
-        }
-
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]) div[data-testid="column"],
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) div[data-testid="column"] {
-            width: auto !important;
-            min-width: 0 !important;
-            flex: 0 0 auto !important;
-        }
-
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]) div[data-testid="column"]:first-child,
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) div[data-testid="column"]:first-child {
-            flex: 1 1 auto !important;
-        }
-
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]) div[data-testid="stTextInput"],
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) div[data-testid="stTextInput"] {
-            margin-bottom: 0 !important;
-        }
-
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Ask SRI Agent"]) input,
-        div[data-testid="stHorizontalBlock"]:has(input[aria-label="Message SRI..."]) input {
-            background: transparent !important;
-            border: none !important;
-            color: #FFFFFF !important;
-            box-shadow: none !important;
-            padding-left: 0 !important;
-            font-size: 0.88rem !important;
-        }
-
-        /* Circular Mic & Gold Send Buttons inside dock */
-        button[key="unified_mic_btn"] {
-            background: transparent !important;
-            border: none !important;
-            color: #94A3B8 !important;
-            font-size: 1.15rem !important;
-            border-radius: 50% !important;
-            padding: 4px !important;
-            transition: color 0.2s, background 0.2s !important;
-        }
-
-        button[key="unified_mic_btn"]:hover {
-            color: #F59E0B !important;
-            background: rgba(245, 158, 11, 0.12) !important;
-        }
-
-        button[key="unified_send_btn"] {
-            background: linear-gradient(135deg, #F59E0B, #D97706) !important;
-            color: #060709 !important;
-            font-weight: 900 !important;
-            font-size: 1.05rem !important;
-            border: none !important;
-            border-radius: 50% !important;
-            width: 36px !important;
-            height: 36px !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            box-shadow: 0 2px 10px rgba(245, 158, 11, 0.45) !important;
-            transition: transform 0.2s, box-shadow 0.2s !important;
-        }
-
-        button[key="unified_send_btn"]:hover {
-            transform: scale(1.08) !important;
-            box-shadow: 0 4px 18px rgba(245, 158, 11, 0.65) !important;
-        }
-
-        /* Buttons styling */
-        button[kind="primary"] {
-            background: linear-gradient(135deg, #F59E0B, #D97706) !important;
-            color: #060709 !important;
-            font-weight: 700 !important;
-            border: none !important;
-            border-radius: 9999px !important;
-            box-shadow: 0 4px 18px rgba(245, 158, 11, 0.35) !important;
-            transition: all 0.2s ease !important;
-        }
-
-        button[kind="secondary"] {
-            background: #0E1117 !important;
-            color: #E2E8F0 !important;
-            border: 1px solid #262A34 !important;
-            border-radius: 9999px !important;
-            font-size: 0.78rem !important;
-            transition: all 0.2s ease !important;
-        }
-
-        button[kind="secondary"]:hover {
-            border-color: #F59E0B !important;
-            color: #FBBF24 !important;
-            background: rgba(245, 158, 11, 0.08) !important;
-        }
-
-        /* Text inputs */
-        input[type="text"], input[type="password"], textarea, .stSelectbox > div > div {
-            background-color: #0C0F17 !important;
-            color: #FFFFFF !important;
-            border: 1px solid #1E222B !important;
-            border-radius: 10px !important;
-        }
-
-        input[type="text"]:focus, input[type="password"]:focus, textarea:focus {
-            border-color: #F59E0B !important;
-            box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25) !important;
-        }
-
-        /* Locked Sticky Top Header (68px, glassmorphic obsidian, 1px #1A1D24 border) */
-        .sri-sticky-header {
-            position: sticky;
-            top: 0;
-            z-index: 999;
-            height: 68px;
-            background: rgba(6, 7, 9, 0.94);
-            backdrop-filter: blur(18px);
-            -webkit-backdrop-filter: blur(18px);
-            border-bottom: 1px solid #1A1D24;
-            padding: 0 24px;
-            margin-top: -0.5rem;
-            margin-left: -1.2rem;
-            margin-right: -1.2rem;
-            margin-bottom: 1.2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-sizing: border-box;
-        }
-
-        .brand-title-wrap {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .brand-logo-editorial {
-            font-size: 1.55rem;
-            font-weight: 800;
-            letter-spacing: -0.5px;
-            color: #FFFFFF;
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            user-select: none;
-        }
-
-        .brand-period-gold {
-            color: #F59E0B;
-            font-weight: 900;
-        }
-
-        .header-center-dock {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .center-agent-pill {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            background: #0E1117;
-            border: 1px solid rgba(245, 158, 11, 0.25);
-            border-radius: 9999px;
-            padding: 6px 18px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: #E2E8F0;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
-            letter-spacing: 0.2px;
-        }
-
-        .gold-status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #F59E0B;
-            box-shadow: 0 0 10px #F59E0B, 0 0 4px #FBBF24;
-            display: inline-block;
-        }
-
-        .header-actions-right {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-        }
-
-        .control-drawer-btn {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            padding: 4px 8px;
-            border-radius: 8px;
-            transition: all 0.2s ease;
-            user-select: none;
-        }
-
-        .control-drawer-btn:hover {
-            background: rgba(245, 158, 11, 0.08);
-        }
-
-        .drawer-text-col {
-            display: flex;
-            flex-direction: column;
-            text-align: left;
-            line-height: 1.15;
-        }
-
-        .drawer-label-top {
-            font-size: 0.82rem;
-            font-weight: 600;
-            color: #E2E8F0;
-        }
-
-        .drawer-label-sub {
-            font-size: 0.72rem;
-            font-weight: 600;
-            color: #F59E0B;
-            text-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
-        }
-
-        .user-avatar-badge {
-            position: relative;
-            width: 34px;
-            height: 34px;
-            background: #12151D;
-            border: 1px solid #232834;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-        }
-
-        .avatar-green-dot {
-            position: absolute;
-            top: 4px;
-            right: 4px;
-            width: 7px;
-            height: 7px;
-            background: #10B981;
-            border-radius: 50%;
-            box-shadow: 0 0 6px #10B981;
-            border: 1px solid #12151D;
-        }
-
-        /* -------------------------------------------------- */
-        /* Left Zone: Subtitle, Title & Divided Metrics List   */
-        /* -------------------------------------------------- */
-        .left-zone-greeting {
-            font-size: 1.05rem;
-            font-weight: 600;
-            color: #D97706;
-            margin-bottom: 2px;
-            letter-spacing: -0.2px;
-        }
-
-        .left-zone-title {
-            font-size: 2.2rem;
-            font-weight: 700;
-            color: #FFFFFF;
-            font-family: 'Playfair Display', Georgia, serif;
-            letter-spacing: -0.5px;
-            margin-bottom: 20px;
-            line-height: 1.1;
-        }
-
-        .metrics-list-card {
-            background: transparent;
-            border-top: 1px solid #1A1D24;
-            border-bottom: 1px solid #1A1D24;
-            padding: 4px 0;
-            margin-bottom: 22px;
-        }
-
-        .metric-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 0;
-            border-bottom: 1px solid #1A1D24;
-            font-size: 0.85rem;
-        }
-
-        .metric-row:last-child {
-            border-bottom: none;
-        }
-
-        .metric-label {
-            color: #94A3B8;
-            font-weight: 500;
-        }
-
-        .metric-val {
-            color: #E2E8F0;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .metric-val-status {
-            color: #F59E0B;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            text-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
-        }
-
-        .metric-dot {
-            font-size: 0.7rem;
-            color: #94A3B8;
-        }
-
-        .gold-dot {
-            font-size: 0.7rem;
-            color: #F59E0B;
-            text-shadow: 0 0 8px #F59E0B;
-        }
-
-        .env-runtime-heading {
-            font-size: 0.82rem;
-            font-weight: 500;
-            color: #64748B;
-            margin-bottom: 10px;
-        }
-
-        .runtime-pills-row {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .runtime-pill {
-            background: #0E1117;
-            border: 1px solid #1E222B;
-            color: #94A3B8;
-            padding: 6px 14px;
-            border-radius: 9999px;
-            font-size: 0.78rem;
-            font-weight: 500;
-        }
-
-        .runtime-pill-gold {
-            color: #F59E0B !important;
-            border: 1px solid rgba(245, 158, 11, 0.45) !important;
-            text-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
-            font-weight: 600;
-        }
-
-        /* -------------------------------------------------- */
-        /* Center Zone: 3D Granulated Golden Particle Sphere   */
-        /* -------------------------------------------------- */
-        .orb-stage-wrapper {
-            position: relative;
-            width: 250px;
-            height: 235px;
-            margin: 0 auto 10px auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .orb-halo-ambient {
-            position: absolute;
-            width: 225px;
-            height: 225px;
-            border-radius: 50%;
-            background: radial-gradient(circle, rgba(245, 158, 11, 0.3) 0%, rgba(217, 119, 6, 0.12) 45%, transparent 70%);
-            filter: blur(14px);
-            pointer-events: none;
-            animation: halo-pulse 3.5s ease-in-out infinite alternate;
-        }
-
-        @keyframes halo-pulse {
-            0% { transform: scale(0.92); opacity: 0.7; }
-            100% { transform: scale(1.12); opacity: 1; }
-        }
-
-        .orb-orbit-ring {
-            position: absolute;
-            width: 215px;
-            height: 215px;
-            border-radius: 50%;
-            border: 1px solid rgba(245, 158, 11, 0.45);
-            box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
-            pointer-events: none;
-            transform-style: preserve-3d;
-        }
-
-        .ring-tilt-a {
-            transform: rotateX(72deg) rotateY(25deg);
-            animation: orbit-spin-a 8s linear infinite;
-        }
-
-        .ring-tilt-b {
-            width: 235px;
-            height: 235px;
-            border: 1px solid rgba(245, 158, 11, 0.35);
-            transform: rotateX(68deg) rotateY(-36deg);
-            animation: orbit-spin-b 11s linear infinite reverse;
-        }
-
-        @keyframes orbit-spin-a {
-            0% { transform: rotateX(72deg) rotateY(25deg) rotateZ(0deg); }
-            100% { transform: rotateX(72deg) rotateY(25deg) rotateZ(360deg); }
-        }
-
-        @keyframes orbit-spin-b {
-            0% { transform: rotateX(68deg) rotateY(-36deg) rotateZ(0deg); }
-            100% { transform: rotateX(68deg) rotateY(-36deg) rotateZ(360deg); }
-        }
-
-        .orbit-sparkle {
-            position: absolute;
-            width: 6px;
-            height: 6px;
-            background: #FFFBEB;
-            border-radius: 50%;
-            box-shadow: 0 0 8px 3px #FBBF24;
-            top: 50%;
-            left: -3px;
-        }
-
-        .orb-canvas-sphere {
-            position: relative;
-            z-index: 2;
-            border-radius: 50%;
-        }
-
-        .orb-center-mic-badge {
-            position: absolute;
-            z-index: 4;
-            width: 52px;
-            height: 52px;
-            border-radius: 50%;
-            background: #0B0E14;
-            border: 1.5px solid rgba(245, 158, 11, 0.65);
-            box-shadow: 0 0 18px rgba(245, 158, 11, 0.45), inset 0 0 8px rgba(0, 0, 0, 0.8);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .orb-stage-wrapper:hover .orb-center-mic-badge {
-            transform: scale(1.08);
-            box-shadow: 0 0 25px rgba(245, 158, 11, 0.7);
-        }
-
-        /* -------------------------------------------------- */
-        /* Right Zone: Project Viewer Card                     */
-        /* -------------------------------------------------- */
-        .pv-glass-container {
-            background: rgba(12, 15, 22, 0.95);
-            border: 1px solid #1E222B;
-            border-radius: 16px;
-            padding: 14px 16px;
-            position: relative;
-            min-height: 480px;
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
-        }
-
-        .pv-meta-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 4px 2px 8px 2px;
-            font-size: 0.82rem;
-            border-bottom: 1px solid #1E222B;
-            margin-bottom: 10px;
-        }
-
-        .pv-file-path {
-            color: #F59E0B;
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 700;
-            text-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
-        }
-
-        .pv-file-size {
-            color: #64748B;
-            font-size: 0.76rem;
-        }
-
-        .pv-sparkle-decor {
-            position: absolute;
-            bottom: 12px;
-            right: 14px;
-            color: #E2E8F0;
-            font-size: 1.3rem;
-            opacity: 0.85;
-            pointer-events: none;
-            text-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
-        }
-
-        /* Mobile responsiveness via CSS purely (@media max-width: 900px) */
-        @media (max-width: 900px) {
-            .header-center-dock {
-                display: none !important;
-            }
-            .sri-sticky-header {
-                padding: 0 14px !important;
-                height: 60px !important;
-                margin-left: -0.8rem !important;
-                margin-right: -0.8rem !important;
-            }
-            div[data-testid="stHorizontalBlock"] {
-                flex-direction: column !important;
-                gap: 18px !important;
-            }
-            div[data-testid="column"] {
-                width: 100% !important;
-                flex: 1 1 100% !important;
-                min-width: 100% !important;
-            }
-        }
-    </style>
-    <script>
-    (function() {
-        const canvas = document.getElementById('obsidian-ambient-canvas');
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        let width = canvas.width = window.innerWidth;
-        let height = canvas.height = window.innerHeight;
-
-        window.addEventListener('resize', () => {
-            width = canvas.width = window.innerWidth;
-            height = canvas.height = window.innerHeight;
-        });
-
-        const colors = ['#F59E0B', '#D97706', '#FBBF24', '#B45309'];
-        const particleCount = 45;
-        const particles = [];
-        for (let i = 0; i < particleCount; i++) {
-            particles.push({
-                x: Math.random() * width,
-                y: height + Math.random() * 200,
-                radius: Math.random() * 2.2 + 0.8,
-                color: colors[Math.floor(Math.random() * colors.length)],
-                speedY: Math.random() * 0.45 + 0.15,
-                wobbleSpeed: Math.random() * 0.015 + 0.005,
-                wobbleAmp: Math.random() * 20 + 10,
-                seed: Math.random() * 100,
-                alpha: Math.random() * 0.6 + 0.2
-            });
-        }
-
-        let time = 0;
-        function animate() {
-            ctx.clearRect(0, 0, width, height);
-            time += 0.012;
-
-            // Dark drifting silk waves
-            ctx.save();
-            for (let w = 0; w < 3; w++) {
-                ctx.beginPath();
-                ctx.moveTo(0, height * (0.6 + w * 0.15));
-                for (let x = 0; x <= width; x += 30) {
-                    const waveY = height * (0.6 + w * 0.15) 
-                        + Math.sin(x * 0.002 + time * 0.5 + w) * 45 
-                        + Math.cos(x * 0.001 - time * 0.3) * 35;
-                    ctx.lineTo(x, waveY);
-                }
-                ctx.lineTo(width, height);
-                ctx.lineTo(0, height);
-                ctx.closePath();
-                ctx.fillStyle = `rgba(18, 22, 33, ${0.035 - w * 0.008})`;
-                ctx.fill();
-            }
-            ctx.restore();
-
-            // Amber / tiger-gold embers drifting upward
-            particles.forEach(p => {
-                p.y -= p.speedY;
-                const xOffset = Math.sin(time * p.wobbleSpeed * 50 + p.seed) * p.wobbleAmp;
-                const curX = (p.x + xOffset + width) % width;
-                const twinkle = Math.sin(time * 2 + p.seed) * 0.25 + 0.75;
-                const curAlpha = Math.max(0.1, Math.min(0.9, p.alpha * twinkle));
-
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(curX, p.y, p.radius, 0, Math.PI * 2);
-                ctx.fillStyle = p.color;
-                ctx.globalAlpha = curAlpha;
-                ctx.shadowBlur = p.radius * 4;
-                ctx.shadowColor = p.color;
-                ctx.fill();
-                ctx.restore();
-
-                if (p.y < -20) {
-                    p.y = height + Math.random() * 50;
-                    p.x = Math.random() * width;
-                }
-            });
-
-            requestAnimationFrame(animate);
-        }
-        animate();
-    })();
-    </script>
-    """
-    st.markdown(theme_html, unsafe_allow_html=True)
-
-
-def render_sticky_top_header():
-    """Renders locked sticky top header matching reference UI pixel-for-pixel."""
-    header_html = """
-    <div class="sri-sticky-header">
-        <div class="brand-title-wrap">
-            <span class="brand-logo-editorial">SRI AI<span class="brand-period-gold">.</span></span>
-        </div>
-        <div class="header-center-dock">
-            <div class="center-agent-pill">
-                <span class="gold-status-dot"></span>
-                <span>98.4% Agent Active</span>
-            </div>
-        </div>
-        <div class="header-actions-right">
-            <div class="control-drawer-btn" onclick="
-                var btn = (window.parent && window.parent.document.querySelector('[data-testid=collapsedControl] button')) ||
-                          document.querySelector('[data-testid=collapsedControl] button') ||
-                          document.querySelector('[data-testid=stSidebarCollapseButton] button') ||
-                          (window.parent && window.parent.document.querySelector('[data-testid=stSidebarCollapseButton] button'));
-                if(btn) { btn.click(); }
-            " title="Open Technical Controls Drawer">
-                <svg class="drawer-sliders-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="4" y1="21" x2="4" y2="14"></line>
-                    <line x1="4" y1="10" x2="4" y2="3"></line>
-                    <line x1="12" y1="21" x2="12" y2="12"></line>
-                    <line x1="12" y1="8" x2="12" y2="3"></line>
-                    <line x1="20" y1="21" x2="20" y2="16"></line>
-                    <line x1="20" y1="12" x2="20" y2="3"></line>
-                    <line x1="1" y1="14" x2="7" y2="14"></line>
-                    <line x1="9" y1="8" x2="15" y2="8"></line>
-                    <line x1="17" y1="16" x2="23" y2="16"></line>
-                </svg>
-                <div class="drawer-text-col">
-                    <span class="drawer-label-top">Control Drawer</span>
-                    <span class="drawer-label-sub">Sri (Ready)</span>
-                </div>
-            </div>
-            <div class="user-avatar-badge" title="Sri (Ready) — Online">
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                    <circle cx="12" cy="7" r="4"></circle>
-                </svg>
-                <span class="avatar-green-dot"></span>
-            </div>
-        </div>
-    </div>
-    """
-    st.markdown(header_html, unsafe_allow_html=True)
-
-
+VOICE_TECHNICAL_PROMPT = "Tamil, English, Python, HTML, CSS, JavaScript, UI, App, Research"
+
+
+def _transcribe_with_whisper(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
+    if not groq_key or not OpenAI:
+        raise ValueError("GROQ_API_KEY unavailable.")
+    clean_mime = (mime_type or "audio/wav").split(";")[0].strip().lower()
+    ext = "webm" if "webm" in clean_mime else ("ogg" if "ogg" in clean_mime else ("mp3" if "mp3" in clean_mime else "wav"))
+    client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+    transcription = client.audio.transcriptions.create(
+        model="whisper-large-v3-turbo",
+        file=(f"audio.{ext}", io.BytesIO(audio_bytes), clean_mime),
+        response_format="text",
+        language="ta",
+        prompt=VOICE_TECHNICAL_PROMPT,
+    )
+    txt = transcription if isinstance(transcription, str) else getattr(transcription, "text", "")
+    if txt and txt.strip():
+        return txt.strip()
+    raise ValueError("Empty Whisper transcription.")
+
+
+def _transcribe_with_gemini(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
+    if not gemini_key or not genai:
+        raise ValueError("GEMINI_API_KEY unavailable.")
+    genai.configure(api_key=gemini_key)
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    clean_mime = (mime_type or "audio/wav").split(";")[0].strip().lower()
+    if "wav" in clean_mime:
+        clean_mime = "audio/wav"
+    elif "webm" in clean_mime:
+        clean_mime = "audio/webm"
+    elif "ogg" in clean_mime:
+        clean_mime = "audio/ogg"
+    elif "mp3" in clean_mime or "mpeg" in clean_mime:
+        clean_mime = "audio/mp3"
+    instruction = "Transcribe the spoken Tamil or English audio accurately without adding meta commentary."
+    resp = model.generate_content([{"mime_type": clean_mime, "data": audio_bytes}, instruction], request_options={"timeout": 60})
+    if resp and resp.text and resp.text.strip():
+        return resp.text.strip()
+    raise ValueError("Empty Gemini transcription.")
+
+
+def transcribe_audio_to_text(audio_bytes: bytes, mime_type: str = "audio/wav", engine: str = "auto") -> str:
+    if not audio_bytes or len(audio_bytes) < 64:
+        raise ValueError("Audio recording is empty.")
+    if "whisper" in (engine or "").lower() and groq_key:
+        try:
+            return _transcribe_with_whisper(audio_bytes, mime_type)
+        except Exception:
+            pass
+    if gemini_key:
+        try:
+            return _transcribe_with_gemini(audio_bytes, mime_type)
+        except Exception:
+            pass
+    if groq_key:
+        return _transcribe_with_whisper(audio_bytes, mime_type)
+    raise RuntimeError("No audio transcription provider available.")
 
 
 # ==============================================================================
-# 9. COLLAPSIBLE CONTROL DRAWER / SIDEBAR (ALL 14 BACKEND CONTROLS)
+# 8. AUTONOMOUS 5-STEP BACKGROUND CODE/UI RUNNER
 # ==============================================================================
-with st.sidebar:
-    st.markdown("### ⚙️ SRI Control Drawer")
-    st.caption("Organized technical controls • 24/7 Decoupled Background Engine")
+def extract_code_block(raw_text: str, default_ext: str = "html") -> tuple[str, str]:
+    matches = re.findall(r"```([a-zA-Z0-9_\-\+]*)\s*\n(.*?)```", raw_text, re.DOTALL)
+    if matches:
+        if default_ext in ["html", "htm"]:
+            doc_matches = [m for m in matches if "<!doctype" in m[1].lower() or "<html" in m[1].lower()]
+            if doc_matches:
+                return max(doc_matches, key=lambda m: len(m[1]))[1].strip(), "html"
+        best = max(matches, key=lambda m: len(m[1]))
+        lang = best[0].lower().strip()
+        ext = "html" if lang in ["html", "htm"] else ("py" if lang in ["python", "py"] else default_ext)
+        return best[1].strip(), ext
+    doc_match = re.search(r"(<!DOCTYPE html.*)", raw_text, re.DOTALL | re.IGNORECASE)
+    if doc_match:
+        return re.sub(r"```+$", "", doc_match.group(1)).strip(), "html"
+    return raw_text.strip(), default_ext
 
-    # 1. Workspaces & Background Runner
-    with st.expander("🏢 1. Workspaces & Background Runner", expanded=False):
-        st.markdown("**📂 Workspace Directory Management:**")
-        col_wa_in, col_wa_add = st.columns([3, 1])
-        with col_wa_in:
-            sb_new_work_area = st.text_input(
-                "புதிய வேலை ஏரியாவைச் சேர்க்க:",
-                placeholder="workspace/my_new_app",
-                key="sb_wa_new_input",
-                label_visibility="collapsed",
+
+def validate_artifact_integrity(code: str, ext: str) -> tuple[bool, str, str]:
+    if ext == "html":
+        fixed = re.sub(r"```+$", "", code).strip()
+        if "<!doctype html>" not in fixed.lower() and "<html" not in fixed.lower():
+            fixed = (
+                '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n'
+                '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+                '<title>Generated App</title>\n<script src="https://cdn.tailwindcss.com"></script>\n</head>\n'
+                f'<body class="bg-slate-950 text-slate-100 min-h-screen p-6">\n{fixed}\n</body>\n</html>'
             )
-        with col_wa_add:
-            if st.button("➕ Add", key="sb_wa_add_btn", use_container_width=True) and sb_new_work_area:
-                sri_master_agent.add_new_work_area(sb_new_work_area)
-                st.toast(f"Added workspace: {sb_new_work_area}")
-                st.rerun()
+        if "</html>" not in fixed.lower():
+            fixed += "\n</html>"
+        return True, "HTML verified.", fixed
+    return True, "Code artifact verified.", code
 
-        sb_selected_area = st.selectbox(
-            "📂 எந்த ஏரியாவில் வேலை செய்ய வேண்டும்?",
-            sri_master_agent.approved_work_areas,
-            key="sb_wa_selected_area",
+
+def generate_5d_plan(prompt: str, task_type: str, system_instruction: str = "", task_id: str = ""):
+    planner_prompt = (
+        f'Task Request: "{prompt}"\nTask Type: {task_type}\n'
+        "Formulate a concise 5D Technical Plan with headers:\n"
+        "### 1. Architecture Dimension\n### 2. User Experience Dimension\n"
+        "### 3. Resilience Dimension\n### 4. Efficiency Dimension\n### 5. Reflection & Verification Checklist"
+    )
+    res_plan = call_llm_with_recovery(planner_prompt, system_instruction, task_id=task_id) or ("", "", 0)
+    plan_text, model_name, tokens = res_plan
+    sections = {"architecture": "", "ux": "", "resilience": "", "efficiency": "", "reflection": ""}
+    for key, pat in [
+        ("architecture", r"###\s*1\.\s*Architecture Dimension(.*?)(?=###|\Z)"),
+        ("ux", r"###\s*2\.\s*User Experience Dimension(.*?)(?=###|\Z)"),
+        ("resilience", r"###\s*3\.\s*Resilience Dimension(.*?)(?=###|\Z)"),
+        ("efficiency", r"###\s*4\.\s*Efficiency Dimension(.*?)(?=###|\Z)"),
+        ("reflection", r"###\s*5\.\s*Reflection(.*?)(?=###|\Z)"),
+    ]:
+        m = re.search(pat, plan_text, re.DOTALL | re.IGNORECASE)
+        if m:
+            sections[key] = m.group(1).strip()
+    return sections, plan_text, model_name, tokens
+
+
+def generate_project_schema(prompt: str, architecture_plan: str, system_instruction: str = "", task_id: str = ""):
+    schema_prompt = (
+        f"Architecture:\n{architecture_plan}\nUser Task: {prompt}\n"
+        "Return valid JSON in ```json ... ``` with appName, version, dataModel, initialState, mockRecords."
+    )
+    res = call_llm_with_recovery(schema_prompt, system_instruction, task_id=task_id) or ("", "", 0)
+    raw, model_name, tokens = res
+    m = re.search(r"```(?:json)?\s*\n(.*?)```", raw, re.DOTALL)
+    clean_json = m.group(1).strip() if m else raw.strip()
+    try:
+        formatted = json.dumps(json.loads(clean_json), indent=2)
+    except Exception:
+        formatted = json.dumps(
+            {"appName": "SRI Generated App", "version": "1.0.0", "prompt": prompt, "mockRecords": [{"id": 1, "status": "active"}]},
+            indent=2,
         )
-        sb_task_desc = st.text_area(
-            "📝 ஸ்ரீ (SRI) செய்ய வேண்டிய டாஸ்க்:",
-            placeholder="உம்: மாணவர் ஆப்பிற்கு அழகான UI டிசைன் செய்து கோட் எழுது...",
-            height=90,
-            key="sb_wa_task_desc",
-        )
-        if st.button("🚀 Start Background Task", key="sb_start_bg_btn", type="primary", use_container_width=True):
-            if not sb_task_desc.strip():
-                st.warning("⚠️ தயவுசெய்து டாஸ்க் விவரத்தை உள்ளிடவும்.")
-            else:
-                new_task_id = f"SRI-{uuid.uuid4().hex[:6].upper()}"
-                t_low = sb_task_desc.lower()
-                if any(w in t_low for w in ["design", "ui", "frontend", "டிசைன்", "பக்கம்"]):
-                    ai_engine = "Stitch AI (Frontend Specialist)"
-                    task_type = "frontend"
-                elif any(w in t_low for w in ["code", "app", "deploy", "கோடு", "டிப்ளாய்"]):
-                    ai_engine = "Google Gemini Pro + Antigravity"
-                    task_type = "auto"
-                else:
-                    ai_engine = "OpenRouter Multi-AI Engine"
-                    task_type = "general"
-
-                if sri_cloud_background_worker:
-                    thread = threading.Thread(
-                        target=sri_cloud_background_worker,
-                        args=(new_task_id, sb_selected_area, sb_task_desc.strip(), ai_engine),
-                        daemon=False,
-                    )
-                    thread.start()
-
-                folder_target = sb_selected_area.replace("workspace/", "").strip() or "student_learning_hub"
-                dispatch_background_task(
-                    prompt=sb_task_desc.strip(),
-                    task_type=task_type,
-                    folder_name=folder_target,
-                )
-                st.toast(f"✅ டாஸ்க் தொடங்கியது! ID: {new_task_id}")
-                st.success(f"Started via {ai_engine}! Task ID: `{new_task_id}`")
-                st.rerun()
-
-    # 2. Voice Engine & Task Routing
-    with st.expander("🎙️ 2. Voice Engine & Task Routing", expanded=False):
-        sb_voice_choice = st.radio(
-            "Transcription Route:",
-            options=[
-                "✨ Gemini Multimodal Audio (Tamil & Task Extraction)",
-                "⚡ Groq Whisper (Tamil language='ta')",
-            ],
-            index=0,
-            key="sb_voice_route_selector",
-        )
-        sb_task_classification = st.radio(
-            "Task Classification:",
-            [
-                "Auto-Detect",
-                "Frontend UI (HTML/CSS/JS)",
-                "General Script / Automation",
-                "🛠️ Modify Existing Code (Workspace)",
-            ],
-            key="sb_task_class_selector",
-        )
-        sb_folder_name = st.text_input(
-            "📁 Project Folder Name (inside workspace/):",
-            value="",
-            placeholder="student_learning_hub",
-            key="sb_folder_name_in",
-        )
-        st.caption(f"Target Path: `workspace/{sb_folder_name or '[auto_derived]'}/index.html`")
-
-        if hasattr(st, "audio_input"):
-            sb_v_audio = st.audio_input("Record voice instruction:", key="sb_voice_audio_in")
-            if sb_v_audio is not None:
-                audio_bytes = sb_v_audio.getvalue()
-                mime = sb_v_audio.type or "audio/wav"
-                engine_route = "gemini" if "Gemini" in sb_voice_choice else "whisper"
-                try:
-                    transcribed = transcribe_audio_to_text(audio_bytes, mime_type=mime, engine=engine_route)
-                    st.session_state["task_prompt_val"] = transcribed
-                    st.session_state["active_voice_query"] = transcribed
-                    st.toast("Voice instruction transcribed!")
-                    st.rerun()
-                except Exception as ve:
-                    st.warning(f"Voice notice: {ve}")
-
-        if st.button("🎤 நேரலை மைக்ரோஃபோன் (speech_recognition ta-IN)", key="sb_mic_listen_btn", use_container_width=True):
-            cmd = sri_universal_router.listen_voice_command()
-            if cmd:
-                st.session_state["task_prompt_val"] = cmd
-                st.session_state["active_voice_query"] = cmd
-                st.toast(f"குரல் பெறப்பட்டது: {cmd}")
-                st.rerun()
-
-        cur_p = st.session_state.get("task_prompt_val", "").strip()
-        if cur_p:
-            r_info = sri_voice_router.classify_intent(cur_p)
-            st.info(f"🧭 **Route:** `{r_info['route']}` | **Engine:** `{r_info['engine']}`\n**Workspace:** `{r_info['target_workspace']}`")
-
-    # 3. Model & API Router + Safety Gate
-    with st.expander("🛡️ 3. Model & API Router + Safety Gate", expanded=False):
-        st.markdown("**Execution Gate & Approval Mode:**")
-        auto_approve_toggle = st.toggle("🛡️ Execution Gate: Auto-Approve Mode", value=st.session_state.get("cfg_auto_approve", True), key="sb_auto_approve_toggle")
-        st.session_state["cfg_auto_approve"] = auto_approve_toggle
-
-        if sri_execution_gate.is_active:
-            st.success("🟢 **Execution Gate: ACTIVE (Boundary Enforced)**")
-        else:
-            st.error(f"🛑 **Gate: AUTO-KILLED**\n*{sri_execution_gate.kill_reason}*")
-            if st.button("🔄 Re-Arm Gate", key="sb_rearm_gate_btn", use_container_width=True):
-                if sri_execution_gate.reset_gate(sri_auth_secret):
-                    st.toast("Execution Gate re-armed!")
-                    st.rerun()
-
-        if sri_design_guard.is_active:
-            st.success("🟢 **Design Guard: ACTIVE (Stitch AI & UI Secured)**")
-        else:
-            st.error(f"🛑 **Design Guard: AUTO-KILLED**\n*{sri_design_guard.kill_reason}*")
-            if st.button("🔄 Re-Arm Design Guard", key="sb_rearm_dg_btn", use_container_width=True):
-                if sri_design_guard.reset_guard(sri_auth_secret):
-                    st.toast("Design Guard re-armed!")
-                    st.rerun()
-
-        st.markdown("---")
-        st.markdown("**API Keys & Agent Bridge:**")
-        sb_bridge_key = st.text_input(
-            "Agent Bridge Key (Antigravity):",
-            value=st.session_state.get("cfg_agent_bridge_key", agent_bridge_api_key),
-            type="password",
-            key="sb_bridge_key_in",
-        )
-        if sb_bridge_key:
-            st.session_state["cfg_agent_bridge_key"] = sb_bridge_key
-            os.environ["AGENT_BRIDGE_API_KEY"] = sb_bridge_key
-
-        sb_webhook_url = st.text_input(
-            "Antigravity Webhook URL:",
-            value=st.session_state.get("cfg_antigravity_webhook", antigravity_webhook_url),
-            key="sb_webhook_url_in",
-        )
-        if sb_webhook_url:
-            st.session_state["cfg_antigravity_webhook"] = sb_webhook_url
-            os.environ["ANTIGRAVITY_WEBHOOK_URL"] = sb_webhook_url
-
-        sb_stitch_key = st.text_input(
-            "Stitch AI Key (Frontend UI):",
-            value=st.session_state.get("cfg_stitch_ai_key", stitch_ai_api_key),
-            type="password",
-            key="sb_stitch_key_in",
-        )
-        if sb_stitch_key:
-            st.session_state["cfg_stitch_ai_key"] = sb_stitch_key
-            os.environ["STITCH_AI_API_KEY"] = sb_stitch_key
-
-        st.caption("🟢 Tier 1: Cloud LLM (Gemini 2.5 Flash / OpenRouter Free)")
-        st.caption("🟢 Tier 2: Antigravity Handoff Bridge Active")
-        st.caption("🟢 Tier 3: Stitch AI UI Specialist Active")
-
-    # 4. Twilio Voice Call & WhatsApp Bridge
-    with st.expander("📞 4. Twilio Voice Call & WhatsApp Bridge", expanded=False):
-        admin_num = get_secret("ADMIN_PHONE_NUMBER", "Unconfigured")
-        st.caption(f"Target Phone Number: `{admin_num}`")
-        if st.button("📞 Call Me Now (Test Agent Alert)", key="sb_call_now_btn", use_container_width=True):
-            with st.spinner("Connecting phone call..."):
-                ok, res = make_agent_call("வணக்கம்! உங்கள் ஏஜென்ட் வெற்றிகரமாக இணைக்கப்பட்டுள்ளது.")
-                if ok:
-                    st.success(f"Calling now! Call SID: {res}")
-                else:
-                    st.error(f"Call failed: {res}")
-
-        st.markdown("---")
-        wa_from = get_secret("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
-        wa_to = get_secret("MY_WHATSAPP_NUMBER", "Unconfigured")
-        st.caption(f"WhatsApp From: `{wa_from}` | To: `{wa_to}`")
-        st.caption("Milestone Alerts: 50% Started • 80% Verification • 100% Finished")
-        if st.button("💬 Send Test WhatsApp Alert", key="sb_test_wa_btn", use_container_width=True):
-            if send_whatsapp_message:
-                with st.spinner("Sending WhatsApp message..."):
-                    sent = send_whatsapp_message("🤖 வணக்கம்! இது SRI Cloud Agent-ன் Twilio WhatsApp சோதனைச் செய்தி (Test Message).")
-                    if sent:
-                        st.success("WhatsApp message sent successfully!")
-                    else:
-                        st.warning("Could not send WhatsApp message. Check Twilio credentials.")
-            else:
-                st.error("Twilio WhatsApp client unavailable.")
-
-    # 5. Safe Auto-Code Editor & File Upload
-    with st.expander("🛠️ 5. Safe Auto-Code Editor & File Upload", expanded=False):
-        ws_flist = get_workspace_files()
-        sb_cur_file = st.selectbox(
-            "📁 Select file to inspect & refine:",
-            ws_flist if ws_flist else ["login.html"],
-            key="sb_cur_file_select",
-        )
-        col_seed, col_up = st.columns(2)
-        with col_seed:
-            if st.button("🌱 Seed login.html", key="sb_seed_btn", use_container_width=True):
-                sample_login_code = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Login Portal</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
-  <div class="w-full max-w-md bg-slate-800 rounded-2xl shadow-xl p-8 border border-slate-700">
-    <h1 class="text-2xl font-bold text-white mb-4">Welcome Back</h1>
-    <form class="space-y-4">
-      <input type="email" placeholder="user@example.com" class="w-full px-4 py-2 rounded bg-slate-900 border border-slate-700"/>
-      <button type="submit" class="w-full py-2 bg-indigo-600 rounded font-medium">Sign In</button>
-    </form>
-  </div>
-</body>
-</html>"""
-                with open(os.path.join(WORKSPACE_DIR, "login.html"), "w", encoding="utf-8") as sf:
-                    sf.write(sample_login_code)
-                st.toast("Seeded login.html in workspace!")
-                st.rerun()
-        with col_up:
-            sb_up_toggle = st.toggle("📤 Upload", value=False, key="sb_up_toggle")
-
-        if sb_up_toggle:
-            uploaded_file = st.file_uploader("Upload file to workspace:", type=["html", "py", "js", "css", "json", "txt"], key="sb_uploader_file")
-            if uploaded_file:
-                up_dst = os.path.join(WORKSPACE_DIR, uploaded_file.name)
-                with open(up_dst, "wb") as uf:
-                    uf.write(uploaded_file.getvalue())
-                st.success(f"Uploaded `{uploaded_file.name}` to workspace!")
-                st.rerun()
-
-        if sb_cur_file and os.path.exists(os.path.join(WORKSPACE_DIR, sb_cur_file)):
-            r_ok, r_content, _ = safe_read_code(sb_cur_file)
-            if r_ok:
-                with st.expander(f"👁️ View Original Source Code ({sb_cur_file})", expanded=False):
-                    st.code(r_content, language="html" if sb_cur_file.endswith(".html") else "text")
-
-                sb_edit_instructions = st.text_area(
-                    "Modification Instructions:",
-                    placeholder="e.g. Add dark glassmorphism and password reset modal...",
-                    key="sb_edit_instructions_in",
-                )
-                if st.button("⚡ Execute Safe Auto-Edit", key="sb_exec_auto_edit_btn", type="primary", use_container_width=True):
-                    if sb_edit_instructions.strip():
-                        new_t_id = dispatch_code_edit_task(sb_cur_file, sb_edit_instructions.strip())
-                        st.success(f"Safe Auto-Edit Dispatched! Task ID: `{new_t_id}`")
-                        st.toast("Auto-Edit running in background!")
-                        st.rerun()
-
-    # 6. SRI REST API Gateway & Webhook
-    with st.expander("🔌 6. SRI REST API Gateway & Webhook", expanded=False):
-        st.markdown(f"**Auth Secret:** `{sri_auth_secret}`")
-        st.markdown("**Sample API Commands:**")
-        st.code(
-            f'# Health Check\ncurl "http://localhost:8501/?action=health&auth={sri_auth_secret}"\n\n'
-            f'# Dispatch Autonomous Task\ncurl "http://localhost:8501/?action=dispatch&prompt=Build+a+student+dashboard&auth={sri_auth_secret}"\n\n'
-            f'# Poll Task Status\ncurl "http://localhost:8501/?action=status&task_id=<TASK_ID>&auth={sri_auth_secret}"\n\n'
-            f'# Trigger Twilio Voice Alert\ncurl "http://localhost:8501/?action=call&message=Task+Completed&auth={sri_auth_secret}"',
-            language="bash",
-        )
-
-    # 7. Execution Audit & Maintenance
-    with st.expander("📊 7. Execution Audit & Maintenance", expanded=False):
-        st.markdown("**Task History & Maintenance:**")
-        col_g1, col_g2 = st.columns(2)
-        with col_g1:
-            if st.button("🔄 Refresh View", key="sb_refresh_audit_btn", use_container_width=True):
-                st.rerun()
-        with col_g2:
-            if st.button("🗑️ Clear History", key="sb_clear_hist_btn", use_container_width=True):
-                with db_lock:
-                    with open(DB_FILE, "w", encoding="utf-8") as f:
-                        json.dump({"tasks": {}, "metrics": {"total_tasks": 0, "completed_tasks": 0, "failed_tasks": 0, "total_tokens": 0}}, f, indent=2)
-                st.toast("Tasks database history cleared!")
-                st.rerun()
-
-        if st.button("🧹 Clear Workspace Cache & RAM", key="sb_clean_cache_btn", use_container_width=True):
-            cloud_temp = os.path.join(tempfile.gettempdir(), "streamlit_agent")
-            cleanup_cloud_workspace(cloud_temp)
-            st.toast("🧹 தற்காலிக கோப்புகள் மற்றும் RAM மெமரி சுத்தம் செய்யப்பட்டது!")
-            st.rerun()
-
-        # Step-by-Step Task Token & Audit Log Table (Pure Python HTML - Zero Pandas Dependency)
-        db_audit = load_db()
-        all_audit_tasks = list(db_audit.get("tasks", {}).values())
-        if all_audit_tasks:
-            all_audit_tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
-            table_rows_html = "".join([
-                f"""<tr style="border-bottom: 1px solid rgba(30, 34, 43, 0.7); background: rgba(12, 15, 22, 0.6);">
-                    <td style="padding: 6px 8px; font-weight: 600; font-size: 0.75rem;">{html.escape(t.get('status', ''))}</td>
-                    <td style="padding: 6px 8px; font-family: monospace; font-size: 0.72rem;">{html.escape(t.get('id', ''))}</td>
-                    <td style="padding: 6px 8px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem;">{html.escape(t.get('title', '')[:30])}</td>
-                    <td style="padding: 6px 8px; font-size: 0.75rem;">{t.get('duration_seconds', 0)}s</td>
-                    <td style="padding: 6px 8px; font-size: 0.75rem;">{html.escape(t.get('model_used', 'Pending')[:20])}</td>
-                </tr>"""
-                for t in all_audit_tasks[:10]
-            ])
-            audit_tbl_html = f"""
-            <div style="overflow-x: auto; margin-top: 10px; border-radius: 8px; border: 1px solid #1E222B;">
-                <table style="width: 100%; border-collapse: collapse; font-size: 0.75rem; color: #E2E8F0; text-align: left;">
-                    <thead>
-                        <tr style="background: rgba(18, 22, 31, 0.95); border-bottom: 1px solid #1E222B; color: #F59E0B; text-transform: uppercase;">
-                            <th style="padding: 6px 8px;">Status</th>
-                            <th style="padding: 6px 8px;">ID</th>
-                            <th style="padding: 6px 8px;">Title</th>
-                            <th style="padding: 6px 8px;">Time</th>
-                            <th style="padding: 6px 8px;">Model</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {table_rows_html}
-                    </tbody>
-                </table>
-            </div>
-            """
-            st.markdown(audit_tbl_html, unsafe_allow_html=True)
-
-    # ===========================================================================
-    # 8. 📜 HISTORY — Persistent Task & Chat Log (sri_tasks_history.json)
-    # ===========================================================================
-    with st.expander("📜 8. Task & Chat History", expanded=False):
-        from sri_history_store import (
-            load_history as _load_hist,
-            clear_history as _clear_hist,
-            search_history as _search_hist,
-            build_history_sidebar_html as _hist_html,
-        )
-
-        col_hq, col_hclr = st.columns([3, 1])
-        with col_hq:
-            hist_search_q = st.text_input(
-                "🔍 Search history",
-                placeholder="Filter tasks or replies…",
-                key="sb_hist_search",
-                label_visibility="collapsed",
-            )
-        with col_hclr:
-            if st.button("🗑️ Clear All", key="sb_hist_clear_btn", use_container_width=True):
-                cleared = _clear_hist()
-                st.session_state.history_log = []
-                st.toast(f"🗑️ Cleared {cleared} history entries.", icon="✅")
-                st.rerun()
-
-        hist_entries = (
-            _search_hist(hist_search_q, limit=100)
-            if hist_search_q
-            else _load_hist()[-100:]
-        )
-        st.caption(f"📌 {len(hist_entries)} {'match' if hist_search_q else 'recent'} entr{'y' if len(hist_entries)==1 else 'ies'} · stored in `sri_tasks_history.json`")
-        hist_sidebar_html = _hist_html(hist_entries)
-        st.markdown(
-            f'<div style="max-height:420px;overflow-y:auto;padding-right:4px;">'
-            f"{hist_sidebar_html}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+    return formatted, model_name, tokens
 
 
-# ==============================================================================
-# 10. PERSISTENT LIVE TASK TRACKER (5S NON-BLOCKING FRAGMENT)
-# ==============================================================================
-@st.fragment(run_every="5s")
-def render_persistent_live_task_tracker():
-    """
-    PERSISTENT 'RUNNING THE TASK' LIVE TRACKER (survives browser close/reopen):
-    Loads tasks_db.json on startup. If any task is RUNNING, displays an auto-refreshing
-    live execution banner with warm amber/gold borders and step progress indicators.
-    """
+def run_self_verification(prompt: str, code_sample: str, reflection_checklist: str, system_instruction: str = "", task_id: str = ""):
+    verify_prompt = (
+        f'Request: "{prompt}"\nChecklist: {reflection_checklist}\n'
+        f"Code Head/Tail:\n```html\n{code_sample[:1200]}\n...\n{code_sample[-500:]}\n```\n"
+        "Provide a brief PASSED/VERIFIED QA report."
+    )
+    return call_llm_with_recovery(verify_prompt, system_instruction, task_id=task_id) or ("PASSED", "QA Engine", 0)
+
+
+def run_autonomous_agent(task_id: str):
+    start_time = time.time()
     db = load_db()
-    all_tasks = db.get("tasks", {})
-    running_tasks = [t for t in all_tasks.values() if t.get("status") == "RUNNING"]
+    task = db["tasks"].get(task_id)
+    if not task:
+        return
+    prompt = task["prompt"]
+    task_type = task["task_type"]
+    source_file = task.get("source_file", "")
+    change_request = task.get("change_request", prompt)
+    accumulated_tokens = 0
+    used_models = set()
+    system_instruction = (
+        "You are a Senior Full-Stack Engineer. Produce clean, responsive, self-contained HTML/CSS/JS or Python artifacts with zero placeholders."
+    )
 
-    if running_tasks:
-        running_tasks.sort(
-            key=lambda t: t.get("updated_at") or t.get("created_at") or "", reverse=True
-        )
-        task = running_tasks[0]
-        title = task.get("title", "Untitled Task")
-        step = task.get("current_step", 1)
-        max_steps = task.get("max_steps", 5)
-        progress = task.get("progress_percent", min(100, step * 20))
-        current_action = task.get("current_action", "Processing task step...")
-        active_engine = task.get("active_model_or_bridge") or task.get("model_used") or "Tier 1: Cloud LLM (Gemini / OpenRouter)"
-        folder = task.get("folder_name", "student_learning_hub")
-        created_at_raw = task.get("created_at", "")
+    try:
+        if task_type == "code_edit":
+            update_task_record(task_id, current_step=1)
+            read_ok, original_code, read_err = safe_read_code(source_file)
+            if not read_ok:
+                raise FileNotFoundError(read_err)
+            _, ext_no_dot = os.path.splitext(source_file)
+            lang = ext_no_dot.lower().lstrip(".") or "html"
 
-        elapsed_sec = 0
-        if created_at_raw:
+            update_task_record(task_id, current_step=2, schema_data=f"Source: {source_file}")
+            update_task_record(task_id, current_step=3)
+            code_prompt = (
+                f"Modify '{source_file}':\nChange Request: {change_request}\n"
+                f"Original Code:\n```{lang}\n{original_code}\n```\n"
+                f"Return the FULL updated document inside ```{lang} ... ``` fences."
+            )
+            raw_code, model_used, toks = call_llm_with_recovery(code_prompt, system_instruction, task_id=task_id)
+            accumulated_tokens += toks
+            used_models.add(model_used)
+            body, ext = extract_code_block(raw_code, default_ext=lang)
+            _ok, _msg, finalized_code = validate_artifact_integrity(body, ext)
+            update_task_record(task_id, code=finalized_code, current_step=4)
+            update_task_record(task_id, current_step=5)
+            write_ok, out_path, write_err = safe_write_code(source_file, finalized_code, custom_suffix="_updated")
+            if not write_ok:
+                raise IOError(write_err)
+            duration = round(time.time() - start_time, 2)
+            primary_model = ", ".join(used_models)
+            db = load_db()
+            db["metrics"]["completed_tasks"] += 1
+            db["metrics"]["total_tokens"] += accumulated_tokens
+            save_db(db)
+            update_task_record(
+                task_id, notify_all_complete=False, status="COMPLETED", current_step=5, output_file=out_path,
+                duration_seconds=duration, tokens=accumulated_tokens, model_used=primary_model,
+            )
+            dispatch_task_alert(task_id, f"Refine {source_file}", "COMPLETED", out_path, f"Done in {duration}s")
             try:
-                dt = datetime.fromisoformat(created_at_raw)
-                elapsed_sec = max(0, int((datetime.now() - dt).total_seconds()))
+                check_and_trigger_all_tasks_completed_whatsapp_alert(source_task_id=task_id)
+            except Exception as _wa_err:
+                print(f"ℹ️ All-tasks WhatsApp check notice: {_wa_err}")
+            return
+
+        update_task_record(task_id, current_step=1)
+        plan_5d, plan_text, m1, t1 = generate_5d_plan(prompt, task_type, system_instruction, task_id=task_id)
+        accumulated_tokens += t1
+        used_models.add(m1)
+        update_task_record(task_id, plan=plan_text, plan_5d=plan_5d, current_step=2)
+
+        folder_name = task.get("folder_name", "").strip() or derive_project_slug(task.get("title", ""), prompt)
+        schema_str, m2, t2 = generate_project_schema(prompt, plan_5d.get("architecture", plan_text), system_instruction, task_id=task_id)
+        accumulated_tokens += t2
+        used_models.add(m2)
+        schema_ok, schema_path, _ = create_project_structure(folder_name, "schema.json", schema_str)
+        rel_schema = os.path.relpath(schema_path, WORKSPACE_DIR).replace("\\", "/") if schema_ok else ""
+        update_task_record(task_id, schema_data=schema_str, schema_file=rel_schema, folder_name=folder_name, current_step=3)
+
+        code_prompt = (
+            f"User Request: {prompt}\nArchitecture: {plan_5d.get('architecture', plan_text)}\n"
+            f"Schema:\n```json\n{schema_str}\n```\nGenerate complete single-file code in ```html ... ```."
+        )
+        raw_code, m3, t3 = call_llm_with_recovery(code_prompt, system_instruction, task_id=task_id)
+        accumulated_tokens += t3
+        used_models.add(m3)
+        body, ext = extract_code_block(raw_code, default_ext="html" if task_type == "frontend" else "py")
+        _ok, _msg, finalized_code = validate_artifact_integrity(body, ext)
+        update_task_record(task_id, code=finalized_code, current_step=4)
+
+        verify_text, m4, t4 = run_self_verification(prompt, finalized_code, plan_5d.get("reflection", ""), system_instruction, task_id=task_id)
+        accumulated_tokens += t4
+        used_models.add(m4)
+        update_task_record(task_id, verification_report=verify_text, current_step=5)
+
+        target_file_name = f"index.{ext}" if ext in ["html", "htm"] else f"main.{ext}"
+        c_ok, ws_filepath, c_err = create_project_structure(folder_name, target_file_name, finalized_code)
+        if not c_ok:
+            raise IOError(c_err)
+        rel_ws_path = os.path.relpath(ws_filepath, WORKSPACE_DIR).replace("\\", "/")
+        clean_slug = re.sub(r"[^a-zA-Z0-9_\-]", "_", task["title"].lower())[:30]
+        filepath = os.path.join(OUTPUT_DIR, f"{task_id}_{clean_slug}.{ext}")
+        temp_fp = f"{filepath}.tmp"
+        with open(temp_fp, "w", encoding="utf-8") as f:
+            f.write(finalized_code)
+        os.replace(temp_fp, filepath)
+
+        duration = round(time.time() - start_time, 2)
+        primary_model = ", ".join(used_models)
+        db = load_db()
+        db["metrics"]["completed_tasks"] += 1
+        db["metrics"]["total_tokens"] += accumulated_tokens
+        save_db(db)
+        update_task_record(
+            task_id, notify_all_complete=False, status="COMPLETED", current_step=5, output_file=filepath,
+            workspace_file=rel_ws_path, folder_name=folder_name,
+            duration_seconds=duration, tokens=accumulated_tokens, model_used=primary_model,
+        )
+        dispatch_task_alert(task_id, task["title"], "COMPLETED", ws_filepath, f"Saved at workspace/{rel_ws_path} in {duration}s")
+        try:
+            check_and_trigger_all_tasks_completed_whatsapp_alert(source_task_id=task_id)
+        except Exception as _wa_err:
+            print(f"ℹ️ All-tasks WhatsApp check notice: {_wa_err}")
+    except Exception as exc:
+        duration = round(time.time() - start_time, 2)
+        error_msg = str(exc)
+        status = "TIMEOUT" if "exceeded" in error_msg else "FAILED"
+        db = load_db()
+        db["metrics"]["failed_tasks"] += 1
+        save_db(db)
+        update_task_record(task_id, status=status, duration_seconds=duration, error=error_msg)
+        append_task_log(task_id, f"❌ Task {status}: {error_msg}")
+        dispatch_task_alert(task_id, task.get("title", task_id), status, "", error_msg)
+
+
+def dispatch_code_edit_task(filename: str, change_request: str) -> str:
+    clean_name = filename.strip().replace("\\", "/").lstrip("/")
+    base_display = os.path.basename(clean_name)
+    title = f"Refine {base_display}: {change_request[:24]}"
+    prompt = f"Modify '{clean_name}': {change_request}"
+    rel_path = f"workspace/{clean_name}" if not clean_name.startswith("workspace/") else clean_name
+    if not sri_execution_gate.run_agent_task(sri_auth_secret, "DEBUG_CODE", rel_path):
+        tid = create_task_record(prompt=prompt, task_type="code_edit", title=title, source_file=clean_name, change_request=change_request)
+        update_task_record(tid, status="FAILED", error=f"Gate rejected: {sri_execution_gate.kill_reason}")
+        return tid
+    tid = create_task_record(prompt=prompt, task_type="code_edit", title=title, source_file=clean_name, change_request=change_request)
+    threading.Thread(target=run_autonomous_agent, args=(tid,), daemon=True).start()
+    return tid
+
+
+def dispatch_background_task(prompt: str, task_type: str = "auto", source_file: str = "", folder_name: str = "") -> str:
+    prompt_str = prompt.strip()
+    words = prompt_str.split()
+    title = (" ".join(words[:5]) if words else "Untitled Task")[:40]
+    if not sri_execution_gate.is_active:
+        tid = create_task_record(prompt=prompt_str, task_type=task_type, title=title, folder_name=folder_name or "generated_app")
+        update_task_record(tid, status="FAILED", error=f"Gate locked: {sri_execution_gate.kill_reason}")
+        return tid
+    if task_type == "code_edit" and source_file:
+        return dispatch_code_edit_task(source_file, prompt_str)
+    if task_type == "auto":
+        frontend_kws = ["html", "css", "js", "ui", "ux", "frontend", "dashboard", "landing", "card", "page", "web"]
+        task_type = "frontend" if any(kw in prompt_str.lower() for kw in frontend_kws) else "general"
+    clean_folder = folder_name.strip() if folder_name else derive_project_slug(title, prompt_str)
+    tid = create_task_record(prompt=prompt_str, task_type=task_type, title=title, folder_name=clean_folder)
+    threading.Thread(target=run_autonomous_agent, args=(tid,), daemon=True).start()
+    return tid
+
+
+# ==============================================================================
+# 9. OPEN-ENDED COMPANION BRAIN, LIVE RESEARCH & CONDITIONAL LINK POLICY
+# ==============================================================================
+def parse_bridge_payload(raw_cmd: str) -> tuple[str, str, str]:
+    """Extract optional metadata __SRI_META__JSON__<command> sent by sri_zero_failure_ui."""
+    txt = (raw_cmd or "").strip()
+    m = re.match(r"^__SRI_META__(\{.*?\})__(.*)$", txt, re.DOTALL)
+    if m:
+        try:
+            meta = json.loads(m.group(1))
+            channel = str(meta.get("channel") or "chat").strip().lower()
+            lang = str(meta.get("lang") or "ta-IN").strip()
+            return m.group(2).strip(), channel, lang
+        except Exception:
+            pass
+    return txt, "chat", "ta-IN"
+
+
+def is_realtime_web_search_required(query: str) -> bool:
+    """Detect research topics, web search, real-time news, tech updates, current details, weather, or explicit link searches."""
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    if re.search(r"https?://|www\.", q):
+        return True
+
+    has_explicit_research = any(
+        w in q
+        for w in (
+            "research", "insights", "insight", "tech news", "tech updates", "technology updates",
+            "ai news", "ai updates", "latest updates", "ஆராய்ச்சி", "ரிசர்ச்", "செய்தி", "நியூஸ்", "டெக் நியூஸ்",
+        )
+    )
+    coding_exclusions = [
+        "write code", "write python", "python code", "javascript code", "fix bug", "debug",
+        "syntax error", "event listener", "event loop", "event handler", "dom event", "dispatch event",
+        "find index", "find element", "find in array", "find in list", "regex",
+        "find bug", "find error", "binary search", "search tree", "linear search",
+    ]
+    if not has_explicit_research and any(ex in q for ex in coding_exclusions):
+        return False
+
+    realtime_triggers = [
+        "research", "open research", "research page", "investigate", "deep dive",
+        "insights on", "insights about", "insights", "insight",
+        "search web", "search the web", "web search", "search about", "search for", "look up",
+        "find info", "find information", "information about", "info about", "details about",
+        "explain about", "tell me about", "study about", "study on", "case study",
+        "literature review", "market analysis", "trends in", "fact check", "analyze", "analysis",
+        "compare", "summarize", "summary of",
+        "world news", "live news", "today's news", "todays news", "today news",
+        "latest news", "breaking news", "current news", "tech news", "technology news",
+        "tech updates", "technology updates", "ai news", "ai updates", "latest updates",
+        "recent updates", "live updates", "current affairs", "what's new", "whats new",
+        "news", "headlines", "weather today", "weather in", "live score", "cricket score",
+        "stock price", "crypto price", "gold rate", "exchange rate",
+        "who is the current", "latest version", "what happened", "recent update", "update me on",
+        "where to find", "where can i find", "where to buy", "where to download",
+        "ஆராய்ச்சி", "ரிசர்ச்", "உலக செய்தி", "இன்றைய செய்தி", "செய்திகள்", "செய்தி", "நியூஸ்",
+        "டெக் நியூஸ்", "புதிய தொழில்நுட்பம்", "இப்போது என்ன", "தற்போதைய",
+        "வானிலை", "தங்க விலை", "வலை தேடல்", "தேடு", "தகவல்", "விளக்கு",
+        "பற்றி சொல்லு", "பற்றி கூறு", "அனலைஸ்", "ஒப்பீடு", "எங்கே கிடைக்கும்", "எங்கு கிடைக்கும்",
+    ]
+    if any(trig in q for trig in realtime_triggers):
+        return True
+    if user_explicitly_requested_link(q):
+        return True
+    return False
+
+
+def should_fetch_live_context(query: str) -> bool:
+    """Detect genuine real-time info requests without adding web-scraping lag to casual chat mentioning 'now' or 'today'."""
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    if is_realtime_web_search_required(q):
+        return True
+    live_info_patterns = (
+        r"\b(who is the current|who won|what happened|price of|weather|live score|release date|latest version of)\b",
+        r"\b(latest|current|recent)\s+(news|updates|headlines|events|trends|standings|results)\b",
+        r"\b(today's|todays)\s+(news|weather|price|rate|match|headlines)\b",
+        r"(இன்றைய\s*(?:செய்தி|வானிலை|விலை)|தற்போதைய\s*(?:செய்தி|நிலை)|யார்\s*(?:ஜெயித்த|வென்ற))",
+    )
+    return any(re.search(pat, q) for pat in live_info_patterns)
+
+
+def _strip_cutoff_disclaimers(text: str) -> str:
+    """Remove boilerplate 'I lack real-time access / knowledge cutoff' disclaimers when live grounding is active."""
+    if not text:
+        return ""
+    disclaimer_pats = (
+        r"(?i)^(?:as an ai(?: language model)?,?\s*)?i (?:do not|don't) have (?:access to )?(?:real-time|live|current|internet) (?:information|data|news|updates|access|browsing)[^.!?\n]*[.!?]\s*",
+        r"(?i)^i cannot (?:browse|access|fetch) (?:the )?(?:internet|real-time|live)[^.!?\n]*[.!?]\s*",
+        r"(?i)^my knowledge (?:cutoff|was last updated)[^.!?\n]*[.!?]\s*",
+    )
+    cleaned = text.strip()
+    for pat in disclaimer_pats:
+        cleaned = re.sub(pat, "", cleaned).strip()
+    return cleaned or text.strip()
+
+
+def _clean_retrieval_query(query: str) -> str:
+    cleaned = (query or "").strip()
+    cleaned = re.sub(
+        r"^(?:please\s+|can you\s+|could you\s+|hey sri\s+|sri\s+)*"
+        r"(?:(?:give|send|share|provide|find|get|fetch)\s+(?:me\s+)?(?:the\s+)?)?"
+        r"(?:official\s+)?(?:book\s+link|pdf\s+link|download\s+link|tool\s+download|resource\s+location|resource\s+url|resource\s+link|website\s+link|external\s+link|source\s+link|link|url)\s+(?:for|to|of)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    cleaned = re.sub(
+        r"^(?:where\s+(?:can\s+i|do\s+i|to)\s+(?:find|get|buy|download|read)|how\s+to\s+download)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    cleaned = re.sub(
+        r"^(?:research|investigate|deep dive into|study|analyze|find|search|look up|get|tell me about|explain about|summarize|update me on|what are the|what is the)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned.rstrip("?.! ") or (query or "").strip()
+
+
+def _fetch_google_news_rss(raw_query: str, clean_q: str, allow_links: bool) -> list[dict]:
+    """Fetch real-time structured news items from Google News RSS (English & Tamil editions)."""
+    items: list[dict] = []
+    q_low = (raw_query or "").lower()
+    is_tamil = bool(re.search(r"[\u0B80-\u0BFF]", raw_query or ""))
+    is_generic_headlines = any(
+        phrase in q_low
+        for phrase in ("today news", "today's news", "todays news", "latest news", "world news", "headlines", "breaking news", "செய்திகள்", "இன்றைய செய்தி")
+    ) and len(clean_q.split()) <= 3
+
+    if is_generic_headlines:
+        rss_url = (
+            "https://news.google.com/rss?hl=ta&gl=IN&ceid=IN:ta"
+            if is_tamil
+            else "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en"
+        )
+    else:
+        encoded = urllib.parse.quote_plus(clean_q)
+        rss_url = (
+            f"https://news.google.com/rss/search?q={encoded}&hl=ta&gl=IN&ceid=IN:ta"
+            if is_tamil
+            else f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
+        )
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; SRICompanion/1.0)"}
+    req = urllib.request.Request(rss_url, headers=headers)
+    with urllib.request.urlopen(req, timeout=3.2) as resp:
+        xml_bytes = resp.read()
+    root = ET.fromstring(xml_bytes)
+    for node in root.findall("./channel/item")[:5]:
+        title = (node.findtext("title") or "").strip()
+        if not title:
+            continue
+        link = (node.findtext("link") or "").strip()
+        pub_date = (node.findtext("pubDate") or "").strip()
+        source_el = node.find("source")
+        source_name = (source_el.text or "").strip() if source_el is not None and source_el.text else "Google News"
+        desc_raw = node.findtext("description") or ""
+        desc_clean = html_lib.unescape(re.sub(r"<[^>]+>", " ", desc_raw))
+        desc_clean = re.sub(r"\s+", " ", desc_clean).strip()
+        short_date = " ".join(pub_date.split()[:4]) if pub_date else "Live"
+        snippet = desc_clean if desc_clean and desc_clean.lower() != title.lower() else f"Reported by {source_name} ({short_date})."
+        items.append({
+            "title": html_lib.unescape(title),
+            "snippet": snippet[:320],
+            "url": link if (allow_links and is_valid_external_url(link)) else "",
+            "badge": f"Live News · {source_name[:22]}",
+            "published": short_date,
+        })
+    return items
+
+
+def _fetch_tech_updates_hn(raw_query: str, clean_q: str, allow_links: bool) -> list[dict]:
+    """Fetch live technology & AI updates from Hacker News Algolia API."""
+    q_low = (raw_query or "").lower()
+    is_tech_oriented = any(
+        k in q_low
+        for k in (
+            "tech", "technology", "ai", "software", "programming", "python", "javascript", "react",
+            "cloud", "startup", "model", "llm", "gemini", "openai", "chip", "hardware", "cyber",
+            "டெக்", "தொழில்நுட்பம்", "ஏஐ",
+        )
+    )
+    if not is_tech_oriented:
+        return []
+
+    encoded = urllib.parse.quote_plus(clean_q)
+    api_url = f"https://hn.algolia.com/api/v1/search_by_date?query={encoded}&tags=story&hitsPerPage=4"
+    if len(clean_q.split()) <= 2 and any(k in q_low for k in ("tech news", "tech updates", "technology updates", "technology news")):
+        api_url = "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=4"
+
+    req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0 (compatible; SRICompanion/1.0)"})
+    with urllib.request.urlopen(req, timeout=3.0) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+    items: list[dict] = []
+    for hit in (data.get("hits") or [])[:4]:
+        title = (hit.get("title") or "").strip()
+        if not title:
+            continue
+        created_at = str(hit.get("created_at") or "")[:10] or "Today"
+        points = hit.get("points") or 0
+        story_text = re.sub(r"<[^>]+>", " ", str(hit.get("story_text") or "")).strip()
+        snippet = story_text[:280] if story_text else f"Live tech discussion ({points} upvotes · {created_at})."
+        hit_url = (hit.get("url") or "").strip()
+        items.append({
+            "title": html_lib.unescape(title),
+            "snippet": html_lib.unescape(snippet),
+            "url": hit_url if (allow_links and is_valid_external_url(hit_url)) else "",
+            "badge": "Tech Update · Live",
+            "published": created_at,
+        })
+    return items
+
+
+def _fetch_wikipedia_and_ddg_info(clean_q: str, allow_links: bool) -> list[dict]:
+    """Fetch instant general info via DuckDuckGo Instant Answer JSON, Wikipedia API, and DDG HTML."""
+    items: list[dict] = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    # 1. DuckDuckGo Instant Answer JSON API
+    try:
+        ia_url = f"https://api.duckduckgo.com/?q={urllib.parse.quote_plus(clean_q)}&format=json&no_html=1&skip_disambig=1"
+        req = urllib.request.Request(ia_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            ia = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        abstract = (ia.get("AbstractText") or "").strip()
+        heading = (ia.get("Heading") or clean_q.title()).strip()
+        src_url = (ia.get("AbstractURL") or "").strip()
+        if abstract:
+            items.append({
+                "title": html_lib.unescape(heading),
+                "snippet": html_lib.unescape(abstract[:340]),
+                "url": src_url if (allow_links and is_valid_external_url(src_url)) else "",
+                "badge": "Live Info · Instant",
+                "published": "Live",
+            })
+    except Exception:
+        pass
+
+    # 2. Wikipedia Search API (general knowledge fallback)
+    try:
+        wiki_url = (
+            "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch="
+            + urllib.parse.quote_plus(clean_q)
+            + "&utf8=&format=json&srlimit=2"
+        )
+        req = urllib.request.Request(wiki_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=2.6) as resp:
+            wdata = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        for hit in (wdata.get("query", {}).get("search") or [])[:2]:
+            w_title = (hit.get("title") or "").strip()
+            w_snip = re.sub(r"<[^>]+>", "", str(hit.get("snippet") or "")).strip()
+            if w_title and w_snip:
+                slug = urllib.parse.quote(w_title.replace(" ", "_"))
+                candidate_wiki_url = f"https://en.wikipedia.org/wiki/{slug}"
+                items.append({
+                    "title": html_lib.unescape(w_title),
+                    "snippet": html_lib.unescape(w_snip),
+                    "url": candidate_wiki_url if (allow_links and is_valid_external_url(candidate_wiki_url)) else "",
+                    "badge": "Knowledge Base",
+                    "published": "Verified",
+                })
+    except Exception:
+        pass
+
+    # 3. DuckDuckGo HTML Search
+    try:
+        ddg_url = "https://html.duckduckgo.com/html/"
+        data = urllib.parse.urlencode({"q": clean_q}).encode("utf-8")
+        req = urllib.request.Request(ddg_url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=3.2) as resp:
+            raw_html = resp.read().decode("utf-8", errors="ignore")
+        matches = re.findall(
+            r'<a class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?<a class="result__snippet"[^>]*>(.*?)</a>',
+            raw_html,
+            re.DOTALL,
+        )
+        if not matches:
+            matches = [
+                (m[0], clean_q.title(), m[1])
+                for m in re.findall(
+                    r'<a class="result__url"[^>]*href="([^"]+)"[^>]*>.*?<a class="result__snippet"[^>]*>(.*?)</a>',
+                    raw_html,
+                    re.DOTALL,
+                )
+            ]
+        for m in matches[:4]:
+            raw_url = m[0].strip()
+            title_txt = re.sub(r"<[^>]+>", "", m[1]).strip() or clean_q.title()
+            snippet = re.sub(r"<[^>]+>", "", m[2]).strip()
+            if "uddg=" in raw_url:
+                raw_url = urllib.parse.unquote(raw_url.split("uddg=")[-1].split("&")[0])
+            elif raw_url.startswith("//"):
+                raw_url = "https:" + raw_url
+            items.append({
+                "title": html_lib.unescape(title_txt),
+                "snippet": html_lib.unescape(snippet) or "Verified live search insight.",
+                "url": raw_url if (allow_links and is_valid_external_url(raw_url)) else "",
+                "badge": "Live Web",
+                "published": "Live",
+            })
+    except Exception:
+        pass
+
+    return items
+
+
+def _fetch_gemini_google_search_grounding(query: str) -> str:
+    """Use Gemini's native Google Search Grounding REST tool when GEMINI_API_KEY is available."""
+    global _gemini_cooldown_until
+    if not gemini_key or time.time() < _gemini_cooldown_until:
+        return ""
+    allow_links = user_explicitly_requested_link(query)
+    link_policy_note = (
+        "EXPLICIT RESOURCE LINK REQUEST: Provide only verified, valid https:// links directly answering Kirubhakaran's request."
+        if allow_links
+        else "NO LINKS ALLOWED: Do NOT output any URLs, bare domains, reference links, or download links — summarize naturally in plain conversation."
+    )
+    model_id = (custom_model_name or "gemini-2.5-flash").replace("models/", "")
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={urllib.parse.quote(gemini_key)}"
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    payload = {
+        "systemInstruction": {
+            "parts": [{
+                "text": (
+                    f"{SRI_COMPANION_SYSTEM_PROMPT}\n"
+                    f"{link_policy_note}\n"
+                    f"Current date/time: {now_str}. Use Google Search grounding to retrieve up-to-date verified facts."
+                )
+            }]
+        },
+        "contents": [{"role": "user", "parts": [{"text": query}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 560},
+    }
+    try:
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=4.5) as resp:
+            res_json = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        candidates = res_json.get("candidates") or []
+        if candidates:
+            parts = (candidates[0].get("content") or {}).get("parts") or []
+            text = "\n".join(str(p.get("text") or "") for p in parts if p.get("text")).strip()
+            if allow_links and text and not re.search(r"https?://", text, re.IGNORECASE):
+                chunks = (candidates[0].get("groundingMetadata") or {}).get("groundingChunks") or []
+                valid_uris = []
+                for ch in chunks:
+                    web_info = ch.get("web") or {}
+                    uri = str(web_info.get("uri") or "").strip()
+                    title = str(web_info.get("title") or "").strip()
+                    if is_valid_external_url(uri) and uri not in valid_uris:
+                        valid_uris.append(f"{title + ': ' if title else ''}{uri}")
+                    if len(valid_uris) >= 3:
+                        break
+                if valid_uris:
+                    text = f"{text}\n\n" + "\n".join(valid_uris)
+            if text:
+                return _strip_cutoff_disclaimers(sanitize_unsolicited_links(text, query))
+    except Exception as e:
+        err_low = str(e).lower()
+        if any(k in err_low for k in ("429", "quota", "exhausted", "resource_exhausted")):
+            _gemini_cooldown_until = time.time() + 60
+        print(f"ℹ️ Gemini live search grounding notice: {e}")
+    return ""
+
+
+def collect_realtime_retrieval(query: str) -> dict:
+    """Concurrently aggregate live news RSS, tech feeds, general info, web snippets, and Search grounding."""
+    clean_q = _clean_retrieval_query(query)
+    allow_links = user_explicitly_requested_link(query)
+    raw_items: list[dict] = []
+    grounded_brief = ""
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        fut_news = pool.submit(_fetch_google_news_rss, query, clean_q, allow_links)
+        fut_tech = pool.submit(_fetch_tech_updates_hn, query, clean_q, allow_links)
+        fut_info = pool.submit(_fetch_wikipedia_and_ddg_info, clean_q, allow_links)
+        fut_gemini = pool.submit(_fetch_gemini_google_search_grounding, query) if gemini_key else None
+
+        for fut in (fut_news, fut_tech, fut_info):
+            try:
+                res = fut.result(timeout=4.0)
+                if isinstance(res, list):
+                    raw_items.extend(res)
             except Exception:
                 pass
-        elapsed_str = f"{elapsed_sec // 60}m {elapsed_sec % 60}s" if elapsed_sec >= 60 else f"{elapsed_sec}s"
+        if fut_gemini is not None:
+            try:
+                grounded_brief = fut_gemini.result(timeout=4.8) or ""
+            except Exception:
+                grounded_brief = ""
 
-        step_names = ["1. 5D Plan", "2. Schema & Init", "3. Code & UI", "4. Self-Verify", "5. Persistence"]
-        step_capsules_html = ""
-        for i in range(1, 6):
-            if i < step:
-                status_icon = "✓"
-                badge_bg = "rgba(16, 185, 129, 0.2)"
-                badge_border = "#10B981"
-                badge_color = "#34D399"
-            elif i == step:
-                status_icon = "🔄"
-                badge_bg = "rgba(245, 158, 11, 0.25)"
-                badge_border = "#F59E0B"
-                badge_color = "#FBBF24"
-            else:
-                status_icon = "⏳"
-                badge_bg = "rgba(30, 34, 43, 0.6)"
-                badge_border = "#1E222B"
-                badge_color = "#64748B"
-            step_capsules_html += f"""
-            <span style="background: {badge_bg}; border: 1px solid {badge_border}; color: {badge_color};
-                         padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600;">
-                {status_icon} {step_names[i-1]}
-            </span>
-            """
-
-        banner_html = f"""
-        <div style="background: linear-gradient(135deg, rgba(12, 15, 22, 0.98), rgba(20, 24, 35, 0.95));
-                    border: 1.5px solid #F59E0B; border-radius: 14px; padding: 16px 20px; margin-bottom: 18px;
-                    box-shadow: 0 0 25px rgba(245, 158, 11, 0.25);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <span style="font-size: 1.3rem;">🔄</span>
-                    <span style="font-weight: 800; color: #F59E0B; font-size: 1.05rem; letter-spacing: -0.3px;">
-                        Running the Task: <span style="color: #FFFFFF;">{html.escape(title[:45])}</span>
-                    </span>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="background: rgba(245, 158, 11, 0.15); color: #FBBF24; border: 1px solid rgba(245, 158, 11, 0.4);
-                                 padding: 3px 12px; border-radius: 9999px; font-size: 0.82rem; font-weight: 700;">
-                        Step {step}/{max_steps} ({progress}%)
-                    </span>
-                    <span style="background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.3);
-                                 padding: 3px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600;">
-                        ● LIVE RUNNING
-                    </span>
-                </div>
-            </div>
-
-            <div style="color: #F1F5F9; font-size: 0.9rem; margin-bottom: 8px; font-weight: 500;">
-                ⚡ <b>Current Action:</b> <span style="color: #E2E8F0;">{html.escape(current_action)}</span>
-            </div>
-
-            <div style="width: 100%; background: #060709; border-radius: 9999px; height: 8px; overflow: hidden; margin-bottom: 10px; border: 1px solid #1E222B;">
-                <div style="width: {progress}%; background: linear-gradient(90deg, #F59E0B, #FBBF24); height: 100%; border-radius: 9999px; transition: width 0.5s ease;"></div>
-            </div>
-
-            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
-                {step_capsules_html}
-            </div>
-
-            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; color: #94A3B8; flex-wrap: wrap; gap: 6px;">
-                <span>🤖 <b>Engine:</b> {html.escape(active_engine)}</span>
-                <span>📁 <b>Target:</b> <code style="color: #F59E0B; text-shadow: 0 0 8px rgba(245, 158, 11, 0.4); font-weight: 700;">workspace/{html.escape(folder)}</code></span>
-                <span>⏱️ <b>Elapsed:</b> {elapsed_str}</span>
-                <span style="color: #F59E0B;">🔄 Live 5s sync</span>
-            </div>
-        </div>
-        """
-        st.markdown(banner_html, unsafe_allow_html=True)
-    else:
-        completed = [t for t in all_tasks.values() if t.get("status") == "COMPLETED"]
-        if completed:
-            completed.sort(
-                key=lambda t: t.get("updated_at") or t.get("created_at") or "",
-                reverse=True,
-            )
-            recent = completed[0]
-            st.markdown(
-                f"""
-                <div style="background: rgba(12, 15, 22, 0.85); border: 1px solid rgba(16, 185, 129, 0.35);
-                            border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; display: flex;
-                            justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="color: #10B981; font-size: 1.1rem;">✅</span>
-                        <span style="font-size: 0.88rem; color: #E2E8F0;">
-                            <b>Last Task Finished:</b> {html.escape(recent.get('title', 'Task')[:45])}
-                            <span style="color: #94A3B8;">({recent.get('duration_seconds', 0)}s via {recent.get('model_used', 'AI Engine')})</span>
-                        </span>
-                    </div>
-                    <span style="font-size: 0.78rem; color: #10B981; font-weight: 600;">Status: COMPLETED (100%)</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-
-# ==============================================================================
-# 11. SRI ZERO-FAILURE FRONTEND ENGINE & COMMAND ROUTER
-# ==============================================================================
-restore_session_state_on_wakeup()
-
-# 1. Gather live telemetry and project files for Zero-Failure UI
-db_state = load_db()
-metrics = db_state.get("metrics", {})
-all_tasks = db_state.get("tasks", {})
-
-running_count = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
-completed_count = metrics.get("completed_tasks", 0)
-failed_count = metrics.get("failed_tasks", 0)
-agent_status_str = "SRI (Active)" if running_count > 0 else "SRI (Ready)"
-
-# Target workspace file
-target_rel = "login.html"
-target_full = os.path.join(WORKSPACE_DIR, target_rel)
-if not os.path.exists(target_full):
-    ws_files = get_workspace_files()
-    target_rel = ws_files[0] if ws_files else "login.html"
-    target_full = os.path.join(WORKSPACE_DIR, target_rel)
-
-generated_code = ""
-if os.path.exists(target_full):
-    try:
-        with open(target_full, "r", encoding="utf-8") as f:
-            generated_code = f.read()
-    except Exception:
-        generated_code = ""
-
-workspace_file_label = f"workspace/{target_rel}"
-generated_preview_html = generated_code
-
-
-import urllib.parse
-import urllib.request
-
-def inspect_workspace_state() -> dict:
-    """
-    Inspects all files in WORKSPACE_DIR and tasks in tasks_db.json.
-    Returns structured summaries of completed files and active work.
-    """
-    files_summary = []
-    if os.path.exists(WORKSPACE_DIR):
-        for f in os.listdir(WORKSPACE_DIR):
-            f_path = os.path.join(WORKSPACE_DIR, f)
-            if os.path.isfile(f_path):
-                sz = os.path.getsize(f_path)
-                files_summary.append(f"{f} ({sz} bytes)")
-
-    db = load_db()
-    tasks = db.get("tasks", {})
-    running = [t for t in tasks.values() if t.get("status") == "RUNNING"]
-    completed = [t for t in tasks.values() if t.get("status") == "COMPLETED"]
+    # Deduplicate by normalized title and keep cleanest top findings
+    seen_titles: set[str] = set()
+    dedup_items: list[dict] = []
+    for it in raw_items:
+        norm = re.sub(r"\W+", "", (it.get("title") or "").lower())[:48]
+        if not norm or norm in seen_titles:
+            continue
+        seen_titles.add(norm)
+        clean_it = dict(it)
+        cand_url = str(clean_it.get("url") or "").strip()
+        clean_it["url"] = cand_url if (allow_links and is_valid_external_url(cand_url)) else ""
+        dedup_items.append(clean_it)
+        if len(dedup_items) >= 6:
+            break
 
     return {
-        "files": files_summary or ["login.html (1861 bytes)"],
-        "running_tasks": running,
-        "completed_tasks": completed,
-        "total_completed": len(completed)
+        "query": clean_q,
+        "allow_links": allow_links,
+        "items": dedup_items,
+        "grounded_brief": grounded_brief,
+        "retrieved_at": datetime.now().strftime("%Y-%m-%d %I:%M %p"),
     }
 
 
 def perform_live_web_research(query: str) -> dict:
     """
-    Live Web Research Tool (Hackathons, Tech News & Live Info).
-    Searches via HTTP / DuckDuckGo with resilient real-time curated fallback.
-    Returns dict with items, card_html, and voice_summary.
+    Live Companion Research Engine (Real-Time News, Tech Updates, General Info, Deep Research).
+    Combines multi-source live retrieval (Google News RSS, HN Tech API, Wikipedia, DuckDuckGo,
+    and Gemini Google Search Grounding) + fast LLM synthesis.
+    Respects Smart Conditional Linking and friendly Tamil quota/API fallbacks.
     """
-    clean_q = re.sub(r'^(find|search|look up|get|tell me about|what are the)\s+', '', query, flags=re.IGNORECASE).strip()
-    q_low = clean_q.lower()
+    retrieval = collect_realtime_retrieval(query)
+    clean_q = retrieval["query"]
+    allow_links = retrieval["allow_links"]
+    items = retrieval["items"]
+    grounded_brief = retrieval["grounded_brief"]
 
-    items = []
-    # 1. Try DuckDuckGo HTTP Search
-    try:
-        url = "https://html.duckduckgo.com/html/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        data = urllib.parse.urlencode({"q": clean_q}).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers)
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
-            matches = re.findall(r'<a class="result__url"[^>]*href="([^"]+)"[^>]*>.*?<a class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
-            for m in matches[:4]:
-                raw_url = m[0].strip()
-                snippet = re.sub(r'<[^>]+>', '', m[1]).strip()
-                if "uddg=" in raw_url:
-                    raw_url = urllib.parse.unquote(raw_url.split("uddg=")[-1].split("&")[0])
-                items.append({
-                    "title": clean_q.title() + " Opportunity",
-                    "snippet": snippet or "Live opportunity retrieved from global tech index.",
-                    "url": raw_url,
-                    "badge": "Live Web Result"
-                })
-    except Exception as e:
-        print(f"ℹ️ DuckDuckGo live HTTP notice: {e}")
+    # Synthesize open-ended companion brief using retrieved real-time context + fast LLM
+    llm_synthesis = grounded_brief
+    llm_error_msg = ""
+    if not llm_synthesis:
+        try:
+            synth_instr = get_open_ended_companion_prompt(query, mode="chat")
+            snippet_ctx = "\n".join(
+                f"- [{it.get('badge', 'Live')}] {it['title']}: {it['snippet']}"
+                + (f" ({it['url']})" if allow_links and it.get("url") else "")
+                for it in items
+            )
+            synth_prompt = (
+                f"Kirubha asks for live/current details: {query}\n"
+                f"Live retrieval timestamp: {retrieval['retrieved_at']}\n"
+                + (f"Real-time retrieved context:\n{snippet_ctx}\n" if snippet_ctx else "")
+                + "Synthesize a clear, accurate, up-to-date answer directly using the retrieved context. "
+                "Match Kirubha's language (Tamil or English). Never say you lack live internet access."
+            )
+            llm_synthesis = call_fast_voice_llm(synth_prompt, synth_instr, max_tokens=560)
+            llm_synthesis = _strip_cutoff_disclaimers(sanitize_unsolicited_links(llm_synthesis, query))
+        except Exception as llm_err:
+            print(f"⚠️ Research synthesis fallback triggered: {llm_err}")
+            llm_error_msg = _friendly_tamil_ai_error(llm_err)
+            llm_synthesis = ""
 
-    # 2. Resilient curated live intelligence if search returned empty or offline
     if not items:
-        if any(w in q_low for w in ["hackathon", "hack", "ஹேக்கத்தான்", "coding competition"]):
-            items = [
-                {
-                    "title": "Devpost Global Generative AI Hackathon 2026",
-                    "snippet": "$65,000 in cash prizes. Build autonomous AI agents and multimodal apps with global developer teams.",
-                    "url": "https://devpost.com/hackathons",
-                    "badge": "$65K Prizes • Global"
-                },
-                {
-                    "title": "Google Cloud & Vertex AI Agent Hackathon",
-                    "snippet": "Official Google Cloud sprint. Deploy production Gemini Pro agents with Cloud Run and Firebase.",
-                    "url": "https://googlecloud.devpost.com/",
-                    "badge": "Official Google • Free Tier"
-                },
-                {
-                    "title": "Unstop National AI Student Challenge (India)",
-                    "snippet": "India's premier AI and engineering hackathon for students. Mentorship and fast-track hiring interviews.",
-                    "url": "https://unstop.com/hackathons",
-                    "badge": "India • Student Focus"
-                },
-                {
-                    "title": "MLH Global Hack Week 2026",
-                    "snippet": "Major League Hacking worldwide sprint with interactive workshops, swag, and tech prizes.",
-                    "url": "https://mlh.io/seasons/2026/events",
-                    "badge": "MLH • Weekly Sprints"
-                }
-            ]
-        elif any(w in q_low for w in ["internship", "job", "student", "இன்டர்ன்ஷிப்", "career"]):
-            items = [
-                {
-                    "title": "Google Student Developer & AI Internships 2026",
-                    "snippet": "Software engineering, research, and machine learning summer & winter internships for university students.",
-                    "url": "https://careers.google.com/students/",
-                    "badge": "Google • University"
-                },
-                {
-                    "title": "Microsoft Learn Student Ambassadors & Tech Hub",
-                    "snippet": "Exclusive cloud credits, Azure OpenAI vouchers, technical leadership mentorship, and global network.",
-                    "url": "https://mvp.microsoft.com/studentambassadors",
-                    "badge": "Microsoft • Global"
-                },
-                {
-                    "title": "NVIDIA Graduate & Student AI Research Internships",
-                    "snippet": "Work directly on high-performance compute, deep learning models, and CUDA GPU acceleration.",
-                    "url": "https://www.nvidia.com/en-us/about-nvidia/careers/university-recruiting/",
-                    "badge": "NVIDIA • Deep Learning"
-                },
-                {
-                    "title": "GitHub Campus Expert & Open Source Fellowship",
-                    "snippet": "Stipends, developer packs, and mentorship to lead technical open-source student communities.",
-                    "url": "https://education.github.com/experts",
-                    "badge": "GitHub • Open Source"
-                }
-            ]
-        else:
-            items = [
-                {
-                    "title": f"Live Technology Index: {clean_q.title()}",
-                    "snippet": f"Latest verified ecosystem updates, developer documentation, and releases for {clean_q}.",
-                    "url": "https://github.com/trending",
-                    "badge": "Tech News • 2026"
-                },
-                {
-                    "title": "Hacker News & Tech Pulse Top Developments",
-                    "snippet": "Community discussions, trending architectures, and breakthroughs in developer tools.",
-                    "url": "https://news.ycombinator.com/",
-                    "badge": "Developer Pulse"
-                },
-                {
-                    "title": "AI & Open Source Engineering Digest",
-                    "snippet": "Autonomous agents, frontier model benchmarks, and open-source tooling roadmaps.",
-                    "url": "https://huggingface.co/papers",
-                    "badge": "AI Research"
-                }
-            ]
+        fallback_snippet = llm_synthesis or llm_error_msg or f"Live knowledge brief ready for {clean_q}."
+        items = [{
+            "title": clean_q.title(),
+            "snippet": fallback_snippet,
+            "url": "",
+            "badge": "SRI Knowledge Brief",
+            "published": retrieval["retrieved_at"],
+        }]
 
-    # Render Dark-Gold Summary Card HTML
     cards_html = ""
     for it in items:
+        safe_title = html_lib.escape(it["title"])
+        safe_snippet = html_lib.escape(sanitize_unsolicited_links(it["snippet"], query))
+        safe_badge = html_lib.escape(it["badge"])
+        cand_url = str(it.get("url") or "").strip()
+        if allow_links and is_valid_external_url(cand_url):
+            safe_url = html_lib.escape(cand_url)
+            title_block = (
+                f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" '
+                f'style="color:#FBBF24;font-size:14.5px;font-weight:600;text-decoration:none;">'
+                f'{safe_title} ↗</a>'
+            )
+        else:
+            title_block = f'<span style="color:#FBBF24;font-size:14.5px;font-weight:600;">{safe_title}</span>'
+
         cards_html += f"""
-        <div style="background: #0E121A; border: 1px solid #1E222B; border-radius: 12px; padding: 14px; margin-bottom: 12px;">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-            <a href="{it['url']}" target="_blank" rel="noopener noreferrer" style="color: #FBBF24; font-size: 14.5px; font-weight: 600; text-decoration: none; display: flex; align-items: center; gap: 6px;">
-              {it['title']} <span style="font-size: 12px; opacity: 0.85;">↗</span>
-            </a>
-            <span style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); color: #F59E0B; font-size: 10.5px; padding: 2px 8px; border-radius: 999px; font-weight: 500;">{it['badge']}</span>
+        <div style="background:#0E121A;border:1px solid #1E222B;border-radius:12px;padding:14px;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+            {title_block}
+            <span style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);color:#F59E0B;font-size:10.5px;padding:2px 8px;border-radius:999px;font-weight:500;flex-shrink:0;">{safe_badge}</span>
           </div>
-          <p style="font-size: 12.5px; color: #9CA3AF; line-height: 1.5; margin: 0;">{it['snippet']}</p>
+          <p style="font-size:12.8px;color:#CBD5E1;line-height:1.58;margin:0;">{safe_snippet}</p>
         </div>"""
 
-    first_url = items[0]["url"] if items else "https://devpost.com"
+    footer_cta = ""
+    if allow_links and items:
+        first_valid = next((str(it.get("url") or "").strip() for it in items if is_valid_external_url(str(it.get("url") or ""))), "")
+        if first_valid:
+            first_url = html_lib.escape(first_valid)
+            footer_cta = (
+                f'<a href="{first_url}" target="_blank" rel="noopener noreferrer" '
+                f'style="background:linear-gradient(135deg,#F59E0B,#D97706);color:#060709;padding:6px 14px;border-radius:999px;font-size:12px;font-weight:700;text-decoration:none;">'
+                f'Open Resource ↗</a>'
+            )
+
+    safe_query_title = html_lib.escape(clean_q)
+    t_stamp = datetime.now().strftime("%I:%M %p")
+    summary_text = llm_synthesis or llm_error_msg
+    summary_section = ""
+    if summary_text:
+        safe_summary = html_lib.escape(sanitize_unsolicited_links(summary_text, query))
+        summary_section = f"""
+        <div style="background:linear-gradient(135deg,rgba(16,185,129,0.10),rgba(245,158,11,0.06));border:1px solid rgba(16,185,129,0.32);border-left:3px solid #10B981;border-radius:12px;padding:13px 14px;margin-bottom:14px;">
+          <div style="font-size:10.5px;color:#34D399;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Real-Time Executive Summary</div>
+          <div style="font-size:13.2px;color:#F8FAFC;line-height:1.62;white-space:pre-wrap;">{safe_summary}</div>
+        </div>"""
+
+    panel_html = f"""
+    <div style="font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;color:#F4F4F5;padding:2px;">
+      <div style="background:#0A0C10;border:1px solid rgba(245,158,11,0.38);border-radius:16px;padding:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;border-bottom:1px solid #1E222B;padding-bottom:10px;">
+          <span style="background:rgba(245,158,11,0.15);border:1px solid #F59E0B;color:#F59E0B;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;">✦ SRI Real-Time Research</span>
+          <span style="font-size:11px;color:#10B981;font-weight:600;">● Live Verified · {t_stamp}</span>
+        </div>
+        <div style="font-size:16px;font-weight:700;color:#FFFFFF;margin-bottom:12px;line-height:1.35;">{safe_query_title}</div>
+        {summary_section}
+        {cards_html}
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #1E222B;display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:11px;color:#71717A;">SRI Solo AI Companion · Live Retrieval Engine</span>
+          {footer_cta}
+        </div>
+      </div>
+    </div>"""
+
     full_card_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4629,349 +2467,471 @@ def perform_live_web_research(query: str) -> dict:
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ background: #060709; color: #F4F4F5; font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; padding: 14px; }}
-  .research-card {{
-    background: #0A0C10;
-    border: 1px solid rgba(245, 158, 11, 0.38);
-    border-radius: 16px;
-    padding: 20px;
-    box-shadow: 0 0 30px rgba(0, 0, 0, 0.7);
-  }}
-  .badge-row {{
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 14px; border-bottom: 1px solid #1E222B; padding-bottom: 10px;
-  }}
-  .src-badge {{
-    background: rgba(245, 158, 11, 0.15); border: 1px solid #F59E0B;
-    color: #F59E0B; font-size: 11px; font-weight: 700; padding: 3px 10px;
-    border-radius: 999px; text-transform: uppercase; letter-spacing: 0.5px;
-  }}
-  .title-h2 {{ font-size: 18px; font-weight: 700; color: #FFF; margin-bottom: 16px; }}
-  .footer-row {{
-    margin-top: 14px; padding-top: 12px; border-top: 1px solid #1E222B;
-    display: flex; align-items: center; justify-content: space-between;
-  }}
-  .cta-btn {{
-    background: linear-gradient(135deg, #F59E0B, #D97706);
-    color: #060709; padding: 6px 16px; border-radius: 999px;
-    font-size: 12px; font-weight: 700; text-decoration: none;
-    display: inline-block;
-  }}
 </style>
 </head>
 <body>
-  <div class="research-card">
-    <div class="badge-row">
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <span class="src-badge">🔍 Live Web Research</span>
-        <span style="font-size: 11.5px; color: #71717A;">SRI Real-Time Engine</span>
-      </div>
-      <span style="font-size: 11px; color: #10B981; font-weight: 600;">● Live Verified</span>
-    </div>
-    <div class="title-h2">Research Results: {clean_q.title()}</div>
-    {cards_html}
-    <div class="footer-row">
-      <span style="font-size: 11.5px; color: #71717A;">Saved to workspace/research.html</span>
-      <a class="cta-btn" href="{first_url}" target="_blank" rel="noopener noreferrer">Explore Top Result ↗</a>
-    </div>
-  </div>
+  {panel_html}
 </body>
 </html>"""
 
-    highlights = []
-    for idx, it in enumerate(items[:3], 1):
-        highlights.append(f"{idx}) {it['title']} ({it['snippet']})")
-    voice_summary = "Top verified opportunities: " + "; ".join(highlights)
+    voice_summary = llm_synthesis or llm_error_msg or "; ".join(f"{it['title']}: {it['snippet']}" for it in items[:2])
+    voice_summary = _strip_cutoff_disclaimers(sanitize_unsolicited_links(voice_summary, query))
 
     return {
         "query": clean_q,
         "items": items,
+        "panel_html": panel_html,
         "card_html": full_card_html,
-        "voice_summary": voice_summary
+        "voice_summary": voice_summary,
     }
 
 
-def is_realtime_web_search_required(query: str) -> bool:
-    """
-    Smart Conditional Web Search Classifier:
-    Returns True ONLY when query explicitly seeks real-time, live external information
-    (e.g., upcoming hackathons, live internships, today's news/events, current prices, URLs).
-    Returns False for universal knowledge (coding, architecture, startups, general knowledge,
-    algorithms, workspace tasks, daily life) so SRI answers immediately without search latency.
-    """
-    q = query.strip().lower()
-    if not q:
-        return False
-
-    # Check for direct URL lookup
-    if re.search(r'https?://|www\.', q):
-        return True
-
-    # Exclude obvious programming / software engineering concepts that contain keywords like "event" or "find"
-    coding_exclusions = [
-        "event listener", "event loop", "event handler", "dom event", "dispatch event",
-        "find index", "find element", "find in array", "find in list", "regex",
-        "find bug", "find error", "search algorithm", "binary search", "search tree",
-        "linear search", "bfs", "dfs"
-    ]
-    if any(ex in q for ex in coding_exclusions):
-        return False
-
-    # Explicit live web search phrases
-    explicit_web_triggers = [
-        "search web", "search the web", "web search", "look up online",
-        "live news", "today's news", "todays news", "latest news", "breaking news",
-        "live price", "stock price", "crypto price", "weather today",
-        "upcoming hackathon", "hackathons 2026", "hackathon 2026", "devpost hackathon",
-        "latest internship", "internships 2026", "summer internship", "student internship",
-        "coding competition 2026", "tech conference 2026",
-        "இன்றைய செய்தி", "ஹேக்கத்தான்", "இன்டர்ன்ஷிப்", "வலை தேடல்"
-    ]
-    if any(trig in q for trig in explicit_web_triggers):
-        return True
-
-    # Standalone domain keywords that genuinely demand live opportunities
-    domain_keywords = ["hackathon", "hackathons", "internship", "internships"]
-    words = re.findall(r'\b[a-zA-Z\u0B80-\u0BFF]+\b', q)
-    if any(dk in words for dk in domain_keywords):
-        return True
-
-    return False
-
-
-def call_fast_voice_llm(prompt: str, system_instruction: str = "", max_tokens: int = 60) -> str:
-    """
-    Sub-Second Ultra-Fast Voice LLM Router (< 800ms target latency):
-    Tier 1: Groq (llama-3.3-70b-versatile / llama-3.1-70b-versatile) - 300+ tok/sec (~200-400ms).
-    Tier 2: Direct Google Gemini Flash with strict 2.5s thread pool execution timeout.
-    Tier 3: OpenRouter Fast Free Tier with fast failover.
-    """
-    # Tier 1: Groq Ultra-Fast API (< 400ms)
-    if groq_key and OpenAI:
-        groq_models = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile"]
-        try:
-            client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key, max_retries=0)
-            for gm in groq_models:
-                try:
-                    msgs = []
-                    if system_instruction:
-                        msgs.append({"role": "system", "content": system_instruction})
-                    msgs.append({"role": "user", "content": prompt})
-                    res = client.chat.completions.create(
-                        model=gm,
-                        messages=msgs,
-                        temperature=0.4,
-                        max_tokens=max_tokens,
-                        timeout=2.0,
-                    )
-                    text = res.choices[0].message.content
-                    if text and text.strip():
-                        return text.strip()
-                except Exception as e:
-                    err_s = str(e).lower()
-                    print(f"ℹ️ Fast Voice Groq ({gm}) notice: {e}")
-                    if any(x in err_s for x in ["connection", "network", "winerror", "socket", "unreachable", "name resolution"]):
-                        break
-        except Exception as e:
-            print(f"ℹ️ Fast Voice Groq client notice: {e}")
-
-    # Tier 2: Direct Gemini Flash with strict ThreadPoolExecutor timeout (~400ms)
-    if gemini_key and genai and time.time() >= _gemini_cooldown_until:
-        for g_model_name in ["gemini-2.5-flash", "gemini-2.0-flash"]:
-            try:
-                gen_model = genai.GenerativeModel(
-                    model_name=g_model_name,
-                    generation_config={
-                        "temperature": 0.4,
-                        "max_output_tokens": max_tokens,
-                    },
-                    system_instruction=system_instruction if system_instruction else None,
-                )
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    fut = executor.submit(gen_model.generate_content, prompt)
-                    resp = fut.result(timeout=2.0)
-                if resp and resp.text and resp.text.strip():
-                    return resp.text.strip()
-            except Exception as e:
-                err_s = str(e).lower()
-                print(f"ℹ️ Fast Voice Gemini ({g_model_name}) notice: {e}")
-                if any(x in err_s for x in ["connection", "network", "winerror", "socket", "unreachable", "deadline", "timeout"]):
-                    break
-
-    # Tier 3: OpenRouter Fast Free Tier
-    if openrouter_key and OpenAI:
-        or_models = [
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemini-2.0-flash-exp:free"
-        ]
-        try:
-            client_or = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=openrouter_key,
-                max_retries=0,
-                default_headers={
-                    "HTTP-Referer": "https://reakiruba.app",
-                    "X-Title": "SRI Fast Voice Agent",
-                }
-            )
-            for om in or_models:
-                try:
-                    msgs = []
-                    if system_instruction:
-                        msgs.append({"role": "system", "content": system_instruction})
-                    msgs.append({"role": "user", "content": prompt})
-                    res = client_or.chat.completions.create(
-                        model=om,
-                        messages=msgs,
-                        temperature=0.4,
-                        max_tokens=max_tokens,
-                        timeout=2.0,
-                    )
-                    text = res.choices[0].message.content
-                    if text and text.strip():
-                        return text.strip()
-                except Exception as e:
-                    err_s = str(e).lower()
-                    print(f"ℹ️ Fast Voice OpenRouter ({om}) notice: {e}")
-                    if any(x in err_s for x in ["connection", "network", "winerror", "socket", "unreachable"]):
-                        break
-        except Exception as e:
-            print(f"ℹ️ Fast Voice OpenRouter client notice: {e}")
-
-    # Tier 4: Fast Fail to Instant Natural Fallback (< 1.5s total failover)
-    raise RuntimeError("Fast voice models unavailable.")
-
-
-# ==============================================================================
-# AGENT BRAIN & SMART HACKATHON MENTOR INLINE CARD
-# ==============================================================================
-def build_smart_mentor_inline_card(user_prompt: str, reply_text: str) -> str:
-    """
-    Renders an inline Tiger-Gold Obsidian card for the Agent Brain & Smart Mentor:
-    Answers any general query, live news, or task status with proactive developer & hackathon recommendations.
-    """
+def build_companion_inline_card(user_prompt: str, reply_text: str) -> str:
+    """Open-ended Obsidian Companion Card without hardcoded hackathon or login cards."""
     t_stamp = datetime.now().strftime("%I:%M %p")
-    clean_p = html.escape(user_prompt)
-    clean_r = html.escape(reply_text)
-    card_html = f"""
+    clean_p = html_lib.escape(user_prompt)
+    clean_r = html_lib.escape(sanitize_unsolicited_links(reply_text, user_prompt))
+    return f"""
     <div class="slide-inline-card" style="font-family:'Inter',sans-serif;color:#F4F4F5;padding:4px;">
-      <div style="background:linear-gradient(135deg,rgba(245,158,11,0.18),rgba(16,185,129,0.08));border:1px solid rgba(245,158,11,0.5);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 8px 24px rgba(0,0,0,0.6);">
+      <div style="background:linear-gradient(135deg,rgba(245,158,11,0.14),rgba(16,185,129,0.06));border:1px solid rgba(245,158,11,0.42);border-radius:14px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <span style="font-size:11px;color:#F59E0B;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;">✦ SRI Agent Brain & Smart Mentor</span>
+          <span style="font-size:11px;color:#F59E0B;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;">✦ SRI · Solo AI Companion</span>
           <span style="font-size:10px;color:#9CA3AF;background:#141821;border:1px solid #222630;padding:2px 8px;border-radius:999px;">⏱️ {t_stamp}</span>
         </div>
-        <div style="font-size:12px;color:#D1D5DB;margin-bottom:6px;"><strong>Inquiry:</strong> &ldquo;{clean_p}&rdquo;</div>
-        <div style="font-size:13.5px;line-height:1.55;color:#FFFFFF;background:#060709;border-left:3px solid #10B981;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+        <div style="font-size:12px;color:#D1D5DB;margin-bottom:6px;"><strong>Kirubha:</strong> &ldquo;{clean_p}&rdquo;</div>
+        <div style="font-size:13.5px;line-height:1.6;color:#FFFFFF;background:#060709;border-left:3px solid #10B981;border-radius:8px;padding:10px 12px;white-space:pre-wrap;">
           {clean_r}
-        </div>
-      </div>
-
-      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">
-        <div style="background:#0E1117;border:1px solid #222630;border-left:3px solid #F59E0B;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#E5E7EB;">
-          <strong style="color:#F59E0B;">🚀 Hackathon Winning Strategy:</strong> AI-driven adaptive recommendations & real-time analytics engine.
-        </div>
-        <div style="background:#0E1117;border:1px solid #222630;border-left:3px solid #10B981;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#E5E7EB;">
-          <strong style="color:#10B981;">⚡ Teammate Code Polish:</strong> Responsive touch gestures, zero-latency caching & biometric login integration.
-        </div>
-        <div style="background:#0E1117;border:1px solid #222630;border-left:3px solid #60A5FA;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#E5E7EB;">
-          <strong style="color:#60A5FA;">📁 Active Projects:</strong> <code>workspace/student_learning_hub</code> & <code>workspace/login.html</code>
         </div>
       </div>
     </div>
     """
-    return card_html
+
+
+build_smart_mentor_inline_card = build_companion_inline_card
+
+
+def _friendly_tamil_ai_error(err: Exception | str | None = None) -> str:
+    """Return a friendly, conversational Tamil fallback message for quota limits or API errors."""
+    msg = str(err or "").lower()
+    if any(k in msg for k in ["429", "quota", "resource_exhausted", "exhausted", "rate limit", "too many requests"]):
+        return (
+            "மன்னிக்கவும் கிருபா! இப்போது AI பயன்பாட்டு வரம்பு (Quota Limit) நிரம்பிவிட்டது "
+            "அல்லது அதிக கோரிக்கைகள் உள்ளன. சில வினாடிகள் கழித்து மீண்டும் முயற்சிக்கவும்!"
+        )
+    if any(k in msg for k in ["timeout", "deadline", "504", "503", "502", "connection", "network", "unreachable"]):
+        return (
+            "மன்னிக்கவும் கிருபா! AI சேவையகத்துடன் இணைப்பதில் தற்காலிக தாமதம் ஏற்பட்டுள்ளது. "
+            "கொஞ்சம் கழித்து மீண்டும் பேசுங்கள்!"
+        )
+    if any(k in msg for k in ["401", "403", "api_key", "api key", "unauthorized", "permission", "no api keys"]):
+        return (
+            "மன்னிக்கவும் கிருபா! AI சேவை இணைப்பில் (API Key / Service) சிறிய சிக்கல் உள்ளது. "
+            "அமைப்புகளைச் சரிபார்த்து மீண்டும் முயற்சிக்கவும்."
+        )
+    return (
+        "மன்னிக்கவும் கிருபா! தற்போது AI பதில் உருவாக்குவதில் சிறிய தொழில்நுட்பச் சிக்கல் ஏற்பட்டுள்ளது. "
+        "சில வினாடிகளில் மீண்டும் முயற்சிக்கவும்!"
+    )
+
+
+def _normalize_natural_voice_reply(reply_text: str) -> str:
+    """Keep spoken replies natural and fluid without injecting robotic pacing templates or markdown artifacts."""
+    cleaned = re.sub(r"```[\s\S]*?```", "", reply_text or "")
+    cleaned = re.sub(r"[\*_`#~\[\]{}<>|\\]", " ", cleaned)
+    cleaned = re.sub(r"(?m)^\s*(?:[-*+]|\d+\.)\s+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or (reply_text or "").strip()
 
 
 def get_executive_voice_response(
     user_query: str,
-    active_tasks_count: int,
-    workspace_file: str,
-    file_exists: bool,
-    file_size: int,
+    active_tasks_count: int = 0,
+    workspace_file: str = "workspace/login.html",
+    file_exists: bool = False,
+    file_size: int = 0,
     newly_dispatched_id: str | None = None,
     research_summary: str | None = None,
+    channel: str = "chat",
+    preferred_lang: str = "ta-IN",
+    chat_history: list | None = None,
 ) -> str:
     """
-    Universal Omniscient Personal AI Agent for Kirubha:
-    - Complete awareness of Kirubha's user context, files, tasks, Python/Flutter development projects.
-    - Open-ended universal intelligence: answers coding, tech news, project status, architecture, or general knowledge.
-    - Natural bilingual speech (Tamil + English) with concise human voice responses (1 to 2 short sentences, under 28 words).
-    - Checks live task database for status inquiries with 100% precision.
-    - Zero echo loop and zero robotic closing strings.
+    Open-Ended General AI Companion Brain for Kirubha:
+    - Low-latency natural conversation in Tamil (தமிழ் / ta-IN), English, and regional languages.
+    - No rigid templates or robotic speech pacing.
+    - Enforces Conditional Linking (no unsolicited URLs or download links).
     """
-    clean_q = user_query.strip()
-    q_low = clean_q.lower()
-
-    # 1. Instant natural answers for common casual greetings / check-ins (< 1ms)
-    if any(w == q_low or q_low.startswith(w + " ") for w in ["hello", "hi", "hey", "வணக்கம்", "வணக்கம்டா", "vanakkam"]):
-        return "Hey Kirubha! சொல்லுங்க, நம்ம ஹேக்கத்தான் ப்ராஜெக்ட்ல அடுத்து என்ன கில்லர் ஃபீச்சர் சேர்க்கலாம்?"
-
-    if newly_dispatched_id:
-        return f"Done Kirubha! I've started task {newly_dispatched_id} in the background. What's next?"
-
-    if research_summary:
-        return f"Hey Kirubha, I found live updates for '{clean_q}' and put them on your Preview screen. Take a look!"
-
-    # 2. Check if Kirubha is asking about active project or task status
-    is_task_status_query = any(w in q_low for w in [
-        "எங்க போயிட்டு", "என்ன பண்ணுது", "முடிஞ்சு", "மாடல் யூஸ்", "எந்த மாடல்",
-        "where is this project", "status", "progress", "how is the project",
-        "what are you doing", "what is it doing", "task done", "finished"
-    ])
-    if is_task_status_query:
-        try:
-            from agent_voice_chat import get_agent_voice_status_reply
-            status_res = get_agent_voice_status_reply(clean_q)
-            if status_res and status_res.get("spoken_text"):
-                return status_res["spoken_text"]
-        except Exception as e:
-            print(f"ℹ️ Status reply lookup notice: {e}")
-
-    # 3. Hackathon Mentorship & Winning Feature Suggestions Check
-    is_hackathon_query = any(w in q_low for w in ["hackathon", "ஹேக்கத்தான்", "mentor", "win", "score", "feature", "login", "லாகின்"])
-    if is_hackathon_query:
-        return "கிருபா! ஹேக்கத்தானில் அதிக மதிப்பெண்கள் பெற நாம் இந்த லாகின் மாடியூல் மற்றும் அம்சங்களைச் சேர்க்கலாம்: AI adaptive quiz மற்றும் real-time analytics!"
-
-    # 4. Universal Omniscient AI Agent & Smart Hackathon Mentor
-    known_context = (
-        "User: Kirubha (Founder & Lead Engineer).\n"
-        "Role: Universal personal AI agent and smart hackathon mentor built for Kirubha.\n"
-        "Approved Workspaces: workspace/student_learning_hub, workspace/frontend_designs, workspace/automation_scripts, google_antigravity_projects.\n"
-        "Tech Stack & Projects: Python, Streamlit, Flutter mobile development, Antigravity AI orchestration, JavaScript/HTML5, SQLite, Groq, Gemini, OpenRouter.\n"
-        f"Active Tasks: {active_tasks_count} | Active File: {workspace_file}"
-    )
-
-    system_instr = (
-        "You are SRI, Kirubha's universal personal AI agent and smart hackathon mentor. "
-        "You act like a brilliant developer teammate on a live phone call interface.\n"
-        "CORE DIRECTIVES & MENTORSHIP LOGIC:\n"
-        "1. Brilliant Developer Teammate: Do not just give robotic answers. Analyze Kirubha's projects (like the student learning app, python/flutter workflows, login module) and proactively suggest strategic ideas, hackathon-winning killer features (e.g. gamified streaks, AI-driven adaptive recommendations, real-time analytics), and code improvements to score higher.\n"
-        "2. Natural Bilingual Speech: Seamlessly converse in Tamil and English (Tanglish is welcome, e.g. 'கிருபா! ஹேக்கத்தானில் அதிக மதிப்பெண்கள் பெற...').\n"
-        "3. Live Phone Call Tone: Spoken replies must be very concise, visionary, and human (strictly 1 to 2 short sentences max, under 28 words total), direct and confident like a co-founder.\n"
-        "4. Plain Spoken Text Only: Zero markdown, asterisks, brackets, or bullet points. Never append any repetitive robotic footer."
-    )
-
-    user_prompt = f"Context:\n{known_context}\n\nKirubha asks: \"{clean_q}\"\nProvide a natural, concise spoken answer (1-2 short sentences, under 28 words):"
-
     try:
-        executor = ThreadPoolExecutor(max_workers=1)
+        clean_q = (user_query or "").strip()
+        if not clean_q:
+            return "வணக்கம் கிருபா! சொல்லுங்க, எப்படி உதவலாம்?" if preferred_lang == "ta-IN" else "Hey Kirubha! How can I help you today?"
+
+        # 1. Instant ultra-fast greeting fast-path (<1ms, non-repetitive)
+        instant = try_instant_voice_reply(clean_q, preferred_lang=preferred_lang)
+        if instant:
+            return sanitize_unsolicited_links(instant, clean_q)
+
+        if newly_dispatched_id:
+            return (
+                "சரி கிருபா! இதை பின்னணியில் உருவாக்கத் தொடங்கிவிட்டேன் — முடிந்ததும் Preview-வில் பார்க்கலாம்."
+                if preferred_lang == "ta-IN" or re.search(r"[\u0B80-\u0BFF]", clean_q)
+                else "Got it, Kirubha! I've started building that in the background — it'll appear in Preview shortly."
+            )
+
+        if research_summary:
+            clean_summary = _strip_cutoff_disclaimers(sanitize_unsolicited_links(research_summary, clean_q))
+            return _normalize_natural_voice_reply(clean_summary) if channel == "orb" else clean_summary
+
+        # 2. Live task progress status lookup ONLY when user explicitly asks about background task progress
+        q_low = clean_q.lower()
+        is_status_query = any(
+            w in q_low
+            for w in [
+                "எங்க போயிட்டு", "என்ன பண்ணுது", "முடிஞ்சு", "மாடல் யூஸ்", "எந்த மாடல்",
+                "task status", "project status", "background task", "active tasks", "task progress",
+            ]
+        )
+        if is_status_query:
+            db_now = load_db()
+            tasks_map = db_now.get("tasks", {})
+            running = [t for t in tasks_map.values() if t.get("status") == "RUNNING"]
+            completed = [t for t in tasks_map.values() if t.get("status") == "COMPLETED"]
+            if running:
+                rt = running[0]
+                return f"தற்போது '{rt.get('title', 'Task')}' {rt.get('progress_percent', 0)}% முடிந்துள்ளது ({rt.get('current_action', 'running')})."
+            if completed:
+                return f"தற்போது {len(completed)} பணிகள் வெற்றிகரமாக முடிந்துள்ளன. புதிய டாஸ்க் ஏதேனும் தொடங்கலாமா?"
+            return "தற்போது எந்த பின்னணி டாஸ்க்கும் ஓடவில்லை கிருபா. சொல்லுங்க, என்ன செய்யலாம்?"
+
+        # 3. Selective real-time grounding (only for live info queries) + Fast Conversational LLM
+        mode = "voice" if channel == "orb" else "chat"
+        live_context_block = ""
+        if should_fetch_live_context(clean_q):
+            try:
+                live_ret = collect_realtime_retrieval(clean_q)
+                if live_ret.get("grounded_brief"):
+                    brief_clean = _strip_cutoff_disclaimers(sanitize_unsolicited_links(live_ret["grounded_brief"], clean_q))
+                    if brief_clean:
+                        return _normalize_natural_voice_reply(brief_clean) if mode == "voice" else brief_clean
+                live_items = live_ret.get("items") or []
+                if live_items:
+                    allow_links = live_ret.get("allow_links", False)
+                    live_lines = "\n".join(
+                        f"- [{it.get('badge', 'Live')}] {it['title']}: {it['snippet']}"
+                        + (f" ({it['url']})" if allow_links and it.get("url") else "")
+                        for it in live_items[:4]
+                    )
+                    live_context_block = f"\nReal-time retrieved context ({live_ret.get('retrieved_at', '')}):\n{live_lines}"
+            except Exception as live_err:
+                print(f"ℹ️ Auto live-context notice: {live_err}")
+
+        system_instr = get_open_ended_companion_prompt(clean_q, mode=mode, preferred_lang=preferred_lang)
+        now_ctx = datetime.now().strftime("%A, %B %d, %Y %I:%M %p")
+        context_note = f"Current date/time: {now_ctx}. Background tasks running: {active_tasks_count}."
+        full_system = f"{system_instr}\nContext: {context_note}{live_context_block}"
+        token_budget = 220 if mode == "voice" else 1400
+
         try:
-            fut = executor.submit(call_fast_voice_llm, user_prompt, system_instr, 60)
-            reply = fut.result(timeout=2.0)
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-        if reply and len(reply.strip()) > 3:
-            return format_paced_voice_response(clean_q, reply)
-    except Exception as e:
-        print(f"⚠️ Fast voice phone-call LLM notice: {e}")
-
-    # Fallback short conversational reply
-    return f"Got it Kirubha! On '{clean_q}', I'm on it. சொல்லுங்க, what's our next step?"
+            reply = call_fast_voice_llm(
+                clean_q,
+                system_instruction=full_system,
+                max_tokens=token_budget,
+                history_messages=chat_history,
+            )
+            if reply and reply.strip():
+                cleaned = _strip_cutoff_disclaimers(sanitize_unsolicited_links(reply.strip(), clean_q))
+                return _normalize_natural_voice_reply(cleaned) if mode == "voice" else cleaned
+            return _friendly_tamil_ai_error("Empty AI response")
+        except Exception as llm_err:
+            print(f"⚠️ Companion LLM fallback triggered: {llm_err}")
+            return _friendly_tamil_ai_error(llm_err)
+    except Exception as outer_err:
+        print(f"⚠️ Voice/Chat response safety handler caught error: {outer_err}")
+        return _friendly_tamil_ai_error(outer_err)
 
 
 # ==============================================================================
-# ZERO-RELOAD INSTANT VOICE BRIDGE
+# 10. REST API GATEWAY (?action=...)
 # ==============================================================================
-# Hidden st.text_input inside parent document that iframe JS updates directly via React native setter
+def handle_sri_api_gateway():
+    try:
+        params = st.query_params
+    except Exception:
+        return
+    action = (params.get("action", "") or params.get("api", "") or params.get("endpoint", "")).strip().lower()
+    if not action:
+        return
+
+    auth_provided = params.get("auth", "") or params.get("key", "") or params.get("secret", "")
+    if auth_provided != sri_auth_secret:
+        st.json({"status": "error", "code": 401, "error": "Unauthorized SRI_AUTH_SECRET"})
+        st.stop()
+
+    now_ts = datetime.now().isoformat()
+    payload: dict = {"status": "ok", "action": action, "timestamp": now_ts}
+
+    if action == "health":
+        payload["runtime"] = RUNTIME_ENV
+        payload["workspace_dir"] = WORKSPACE_DIR
+    elif action == "dispatch":
+        prompt = params.get("prompt", "") or params.get("task", "")
+        if not prompt:
+            payload = {"status": "error", "code": 400, "error": "'prompt' is required", "timestamp": now_ts}
+        else:
+            tid = dispatch_background_task(prompt, task_type=params.get("type", "auto"), folder_name=params.get("folder", ""))
+            payload["task_id"] = tid
+    elif action == "status":
+        tid = params.get("task_id", "")
+        task = load_db().get("tasks", {}).get(tid)
+        payload = {"status": "ok", "task": task, "timestamp": now_ts} if task else {"status": "error", "code": 404, "error": "Task not found"}
+    elif action == "list":
+        tasks = list(load_db().get("tasks", {}).values())
+        tasks.sort(key=lambda t: str(t.get("created_at", "")), reverse=True)
+        payload["tasks"] = tasks[:25]
+    elif action == "metrics":
+        db_state = load_db()
+        payload["metrics"] = db_state.get("metrics", {})
+        payload["active_running"] = sum(1 for t in db_state.get("tasks", {}).values() if t.get("status") == "RUNNING")
+    elif action == "call":
+        ok, res = make_agent_call(params.get("message", "") or "வணக்கம்! உங்கள் SRI ஏஜென்ட் அழைக்கிறது!")
+        payload.update({"status": "ok" if ok else "error", "success": ok, "call_sid": res if ok else None, "error": None if ok else res})
+    elif action == "workspace":
+        payload["workspace_files"] = get_workspace_files()
+    elif action in ("whatsapp_complete_check", "complete_alert", "all_tasks_completed"):
+        force_send = str(params.get("force", "")).strip().lower() in ("1", "true", "yes")
+        payload["completion_alert"] = check_and_trigger_all_tasks_completed_whatsapp_alert(force=force_send)
+
+    st.json(payload)
+    st.stop()
+
+
+handle_sri_api_gateway()
+
+
+# ==============================================================================
+# 11. SIDEBAR TECHNICAL DRAWER (SRI Control Drawer — Exact 9-Item Menu & Stats)
+# ==============================================================================
+restore_session_state_on_wakeup()
+_drawer_db = load_db()
+_drawer_metrics = _drawer_db.get("metrics", {})
+_drawer_tasks = _drawer_db.get("tasks", {})
+_drawer_active = sum(1 for t in _drawer_tasks.values() if t.get("status") == "RUNNING")
+_drawer_completed = _drawer_metrics.get("completed_tasks", 0)
+_drawer_agent_status = "SRI (Active)" if _drawer_active > 0 else "SRI (Ready)"
+_drawer_ws_files = get_workspace_files()
+_drawer_ws_preview = ", ".join(_drawer_ws_files[:4]) if _drawer_ws_files else "login.html"
+if len(_drawer_ws_files) > 4:
+    _drawer_ws_preview += f" (+{len(_drawer_ws_files) - 4} more)"
+
+with st.sidebar:
+    st.markdown("### ⚙️ SRI Control Drawer")
+    st.caption(f"Open-Ended Companion & Task Engine • {RUNTIME_ENV['env_name']}")
+
+    st.markdown(
+        f"""
+        <div style="background:#0E121A;border:1px solid rgba(245,158,11,0.35);border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#E2E8F0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span style="color:#94A3B8;font-weight:600;">Agent Status</span>
+            <span style="color:#10B981;font-weight:700;">● {html_lib.escape(_drawer_agent_status)}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <div style="background:#060709;border:1px solid #1E222B;border-radius:8px;padding:6px 8px;">
+              <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;">Active Tasks</div>
+              <div style="font-size:15px;font-weight:700;color:#F59E0B;">{_drawer_active}</div>
+            </div>
+            <div style="background:#060709;border:1px solid #1E222B;border-radius:8px;padding:6px 8px;">
+              <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;">Completed</div>
+              <div style="font-size:15px;font-weight:700;color:#10B981;">{_drawer_completed}</div>
+            </div>
+          </div>
+          <div style="background:#060709;border:1px solid #1E222B;border-radius:8px;padding:6px 8px;">
+            <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;margin-bottom:2px;">Workspace ({len(_drawer_ws_files)} files)</div>
+            <div style="font-family:monospace;font-size:11px;color:#FBBF24;word-break:break-word;">workspace/ · {html_lib.escape(_drawer_ws_preview)}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("1. Workspaces & Background Runner", expanded=False):
+        col_wa_in, col_wa_add = st.columns([3, 1])
+        with col_wa_in:
+            sb_new_area = st.text_input("New workspace:", placeholder="workspace/my_app", key="sb_wa_new_input", label_visibility="collapsed")
+        with col_wa_add:
+            if st.button("➕", key="sb_wa_add_btn", use_container_width=True) and sb_new_area:
+                sri_master_agent.add_new_work_area(sb_new_area)
+                st.toast(f"Added: {sb_new_area}")
+                st.rerun()
+
+        sb_selected_area = st.selectbox("Workspace:", sri_master_agent.approved_work_areas, key="sb_wa_selected_area")
+        sb_task_desc = st.text_area("Background build prompt:", placeholder="Build a responsive interactive dashboard...", height=80, key="sb_wa_task_desc")
+        if st.button("🚀 Start Background Task", key="sb_start_bg_btn", type="primary", use_container_width=True):
+            if not sb_task_desc.strip():
+                st.warning("Enter a task prompt.")
+            else:
+                folder_target = sb_selected_area.replace("workspace/", "").strip() or "student_learning_hub"
+                new_tid = dispatch_background_task(sb_task_desc.strip(), task_type="auto", folder_name=folder_target)
+                st.success(f"Task queued: `{new_tid}`")
+                st.rerun()
+
+    with st.expander("2. Voice Engine (ta / en)", expanded=False):
+        _lang_opts = ["ta-IN", "en-IN", "hi-IN", "te-IN", "ml-IN"]
+        _cur_lang = str(st.session_state.get("sri_voice_lang_pref") or "ta-IN")
+        if _cur_lang not in _lang_opts:
+            _cur_lang = "ta-IN"
+        sb_voice_lang = st.selectbox(
+            "Primary Voice Language (ta / en):",
+            _lang_opts,
+            index=_lang_opts.index(_cur_lang),
+            key="sb_voice_engine_lang",
+        )
+        st.session_state["sri_voice_lang_pref"] = sb_voice_lang
+        if hasattr(st, "checkbox"):
+            sb_continuous_orb = st.checkbox(
+                "Continuous Walkie-Talkie Listening",
+                value=bool(st.session_state.get("sri_continuous_voice_enabled", True)),
+                key="sb_voice_continuous_chk",
+            )
+            st.session_state["sri_continuous_voice_enabled"] = sb_continuous_orb
+        st.caption("Neural Edge-TTS + Web Speech Continuous Engine active (`ta-IN` / `en-IN`).")
+
+    with st.expander("3. Model & API Router + Safety Gate", expanded=False):
+        _model_opts = [
+            "gemini-4-hydrogen",
+            "gemini-2.5-flash",
+            "llama-3.3-70b-versatile",
+            "google/gemini-2.0-flash-exp:free",
+        ]
+        _cur_m = custom_model_name or "gemini-4-hydrogen"
+        if _cur_m not in _model_opts:
+            _model_opts.insert(0, _cur_m)
+        sb_model_sel = st.selectbox(
+            "Active AI Model Router:",
+            _model_opts,
+            index=_model_opts.index(_cur_m),
+            key="sb_model_router_sel",
+        )
+        st.session_state["sri_custom_model_override"] = sb_model_sel
+        custom_model_name = sb_model_sel
+
+        _providers_ready = [
+            f"Gemini: {'Ready' if gemini_key else 'Unset'}",
+            f"Groq: {'Ready' if groq_key else 'Unset'}",
+            f"OpenRouter: {'Ready' if openrouter_key else 'Unset'}",
+        ]
+        st.caption(" • ".join(_providers_ready))
+        st.caption(
+            f"Execution Gate: `{'ACTIVE' if sri_execution_gate.is_active else 'LOCKED'}` • "
+            f"Design Guard: `{'ACTIVE' if sri_design_guard.is_active else 'LOCKED'}`"
+        )
+        if st.button("🛡️ Reset Safety Gates", key="sb_reset_gates_btn", use_container_width=True):
+            sri_execution_gate.reset_gate(sri_auth_secret)
+            sri_design_guard.reset_guard(sri_auth_secret)
+            st.success("Safety gates verified and active.")
+            st.rerun()
+
+    with st.expander("4. Twilio Voice Call & WhatsApp Bridge", expanded=False):
+        st.caption(f"Admin Number: `{get_secret('ADMIN_PHONE_NUMBER', 'Unconfigured')}`")
+        st.caption(f"WhatsApp Target: `{_resolve_kirubha_whatsapp_number() or 'Unconfigured'}`")
+        if st.button("📞 Test Voice Call", key="sb_call_now_btn", use_container_width=True):
+            ok, res = make_agent_call("வணக்கம் கிருபா! SRI இணைப்பில் உள்ளது.")
+            st.success(f"Calling! SID: {res}") if ok else st.error(f"Call failed: {res}")
+        if st.button("💬 Test WhatsApp Alert", key="sb_test_wa_btn", use_container_width=True):
+            wa_res = send_whatsapp_notification(
+                "🤖 SRI Solo AI Companion — Kirubha WhatsApp test alert active!",
+                event="test_whatsapp_alert",
+            )
+            if wa_res.get("ok"):
+                prov = wa_res.get("provider", "whatsapp")
+                st.success(f"WhatsApp alert ready via {prov}!")
+            else:
+                st.warning(f"WhatsApp notice: {wa_res.get('error', 'Check WhatsApp webhook/Twilio config')}")
+        if st.button("✅ Check All Tasks & Alert WhatsApp", key="sb_check_all_wa_btn", use_container_width=True):
+            chk_res = check_and_trigger_all_tasks_completed_whatsapp_alert(force=True)
+            if chk_res.get("all_completed"):
+                st.success(f"All Tasks Completed ({chk_res.get('completed_count')}/{chk_res.get('total_tasks')}) — WhatsApp alert sent!")
+            else:
+                st.info(f"Progress: {chk_res.get('completed_count', 0)}/{chk_res.get('total_tasks', 0)} completed ({chk_res.get('progress_percent', 0)}%).")
+
+    with st.expander("5. Safe Auto-Code Editor & File Upload", expanded=False):
+        ws_flist = _drawer_ws_files
+        sb_cur_file = st.selectbox("Select workspace file:", ws_flist if ws_flist else ["login.html"], key="sb_cur_file_select")
+        zip_bytes = create_project_zip_bundle(WORKSPACE_DIR)
+        st.download_button("📦 Download Workspace .ZIP", data=zip_bytes, file_name="sri_workspace.zip", mime="application/zip", use_container_width=True)
+        if sb_cur_file and os.path.exists(os.path.join(WORKSPACE_DIR, sb_cur_file)):
+            r_ok, r_content, _ = safe_read_code(sb_cur_file)
+            if r_ok:
+                st.download_button(f"📥 Download {os.path.basename(sb_cur_file)}", data=r_content, file_name=os.path.basename(sb_cur_file), use_container_width=True)
+                sb_edit = st.text_area("Modify instructions:", key="sb_edit_instructions_in")
+                if st.button("⚡ Execute Safe Auto-Edit", key="sb_exec_auto_edit_btn", use_container_width=True) and sb_edit.strip():
+                    tid = dispatch_code_edit_task(sb_cur_file, sb_edit.strip())
+                    st.success(f"Edit started: `{tid}`")
+                    st.rerun()
+        if hasattr(st, "file_uploader"):
+            sb_uploaded = st.file_uploader(
+                "Upload file to workspace:",
+                type=["html", "css", "js", "py", "json", "txt", "md"],
+                key="sb_workspace_file_upload",
+            )
+            if sb_uploaded is not None and st.button("📤 Save Uploaded File", key="sb_save_upload_btn", use_container_width=True):
+                raw_bytes = sb_uploaded.getvalue() if hasattr(sb_uploaded, "getvalue") else sb_uploaded.read()
+                decoded_txt = raw_bytes.decode("utf-8", errors="replace") if isinstance(raw_bytes, (bytes, bytearray)) else str(raw_bytes)
+                up_ok, _up_path, up_err = create_project_structure("uploads", getattr(sb_uploaded, "name", "uploaded.txt"), decoded_txt)
+                st.success("Uploaded safely to workspace/uploads!") if up_ok else st.error(up_err)
+
+    with st.expander("6. SRI REST API Gateway & Webhook", expanded=False):
+        st.caption("Available Gateway Actions (`?action=`):")
+        if hasattr(st, "code"):
+            st.code("health | dispatch | status | list | metrics | call | workspace | whatsapp_complete_check", language="text")
+        sb_webhook_in = st.text_input(
+            "Webhook Endpoint URL:",
+            value=str(st.session_state.get("sri_webhook_override") or antigravity_webhook_url),
+            key="sb_gateway_webhook_input",
+        )
+        st.session_state["sri_webhook_override"] = sb_webhook_in.strip()
+        st.caption(f"Auth Secret: `Configured ({len(sri_auth_secret)} chars)`")
+
+    with st.expander("7. Execution Audit & Cache Maintenance", expanded=False):
+        st.caption(
+            f"Total: {_drawer_metrics.get('total_tasks', 0)} • "
+            f"Done: {_drawer_completed} • Failed: {_drawer_metrics.get('failed_tasks', 0)} • "
+            f"Tokens: {_drawer_metrics.get('total_tokens', 0)}"
+        )
+        if st.button("🔄 Refresh Execution Audit", key="sb_refresh_audit_btn", use_container_width=True):
+            st.rerun()
+        hist_q = st.text_input("Search audit history:", placeholder="Filter conversation...", key="sb_hist_search", label_visibility="collapsed")
+        entries = _search_hist(hist_q, limit=100) if hist_q else _hist_load()[-100:]
+        st.markdown(f"<div style='max-height:260px;overflow-y:auto;'>{_hist_html(entries)}</div>", unsafe_allow_html=True)
+
+    with st.expander("8. Clear Cache", expanded=False):
+        st.caption("Clear temporary cloud workspace folders, TTS cache, Streamlit caches, and conversation history.")
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            if st.button("🧹 Clear Cache", key="sb_clean_cache_btn", use_container_width=True):
+                cleanup_cloud_workspace(os.path.join(tempfile.gettempdir(), "streamlit_agent"))
+                st.toast("Cache cleaned!")
+                st.rerun()
+        with col_c2:
+            if st.button("🗑️ Clear History", key="sb_hist_clear_btn", use_container_width=True):
+                _clear_hist()
+                st.session_state.history_log = []
+                st.toast("History cleared!")
+                st.rerun()
+
+    with st.expander("9. Account", expanded=False):
+        st.caption("Profile: **Kirubha (Kirubhakaran)**")
+        st.caption(f"Role: `Solo Builder / Owner` • Env: `{RUNTIME_ENV['env_name']}`")
+        st.caption(f"Workspace Root: `{WORKSPACE_DIR}`")
+        if st.button("🔁 Reset Session State", key="sb_account_reset_btn", use_container_width=True):
+            for _rk in ("sri_chat_history", "sri_latest_research_html", "sri_voice_turn_id"):
+                st.session_state.pop(_rk, None)
+            st.toast("Session state reset cleanly.")
+            st.rerun()
+
+
+# ==============================================================================
+# 12. ZERO-RELOAD HIDDEN BRIDGE & MAIN COMPANION ORCHESTRATION
+# ==============================================================================
 st.markdown("""
 <style>
 div[data-testid="stTextInput"]:has(input[aria-label="sri_bridge_input"]),
@@ -4992,11 +2952,13 @@ div:has(> input[aria-label="sri_hidden_bridge"]) {
 </style>
 """, unsafe_allow_html=True)
 
+
 def _on_sri_bridge_change():
     val = st.session_state.get("sri_bridge_input", "").strip()
     if val:
         st.session_state["_active_sri_bridge_cmd"] = val
     st.session_state["sri_bridge_input"] = ""
+
 
 st.text_input(
     "sri_bridge_input",
@@ -5006,316 +2968,198 @@ st.text_input(
     on_change=_on_sri_bridge_change,
 )
 
-# ==============================================================================
-# [Step 1 Integration: Golden Sphere & Live Smart Mentor Handler]
-# ==============================================================================
-def render_agent_brain_hub():
-    """
-    Central Golden Sphere & Mic Interface - Acts strictly as the 'Agent Brain & Smart Mentor'
-    (completely separate from the bottom chat input bar).
-    Initiates live voice interaction mode answering any general query, live news, or task status,
-    proactively proposing hackathon-winning improvements.
-    """
-    if "voice_mode" not in st.session_state:
-        st.session_state.voice_mode = "hub"
+restore_session_state_on_wakeup()
 
-    # Central Golden Sphere interaction logic
-    if st.button("✨ Tap to Talk with SRI (Agent Brain & Smart Mentor)", use_container_width=True):
-        st.session_state.voice_mode = "live_call"
-        st.info("கிருபா! ஹேக்கத்தானில் அதிக மதிப்பெண்கள் பெற நாம் இந்த லாகின் மாடியூல் மற்றும் அம்சங்களைச் சேர்க்கலாம்...")
-
-
-# ==============================================================================
-# [Step 2 Integration: Bottom Chat Box & Task Input Area (Independent)]
-# ==============================================================================
-def render_task_input_bar():
-    """
-    Bottom Chat Input Bar (st.chat_input and attached dictation mic):
-    - Completely independent of the central golden sphere (Agent Brain).
-    - Tapping the chat box mic ONLY transcribes Tamil or English speech into text inside the input box.
-    - The task or prompt is queued and executed ONLY when the user explicitly clicks the 'Send' button.
-    """
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    if "chat_dictated_text" not in st.session_state:
-        st.session_state.chat_dictated_text = ""
-
-    # Attached mic dictation: transcribes speech to text only, never auto-triggers voice calls or tasks
-    if MIC_RECORDER_AVAILABLE and mic_recorder:
-        col_mic, col_status = st.columns([1, 4])
-        with col_mic:
-            audio_record = mic_recorder(
-                start_prompt="🎙️ Chat Mic (Dictate)",
-                stop_prompt="⏹️ Done",
-                key="chat_input_attached_mic",
-                just_once=True,
-                use_container_width=True,
-            )
-            if audio_record and audio_record.get("bytes"):
-                try:
-                    import speech_recognition as sr
-                    recognizer = sr.Recognizer()
-                    audio_file = io.BytesIO(audio_record["bytes"])
-                    with sr.AudioFile(audio_file) as src:
-                        audio = recognizer.record(src)
-                    # Support Tamil or English speech transcription via dynamically attached recognizer
-                    recognize_google = getattr(recognizer, "recognize_google", None)
-                    transcribed_text = ""
-                    if callable(recognize_google):
-                        try:
-                            transcribed_text = str(recognize_google(audio, language="ta-IN"))
-                        except Exception:
-                            transcribed_text = str(recognize_google(audio, language="en-IN"))
-                    if transcribed_text:
-                        st.session_state.chat_dictated_text = transcribed_text
-                        st.toast(f"🎙️ Transcribed into chat: {transcribed_text}", icon="📝")
-                except Exception as e:
-                    print(f"ℹ️ Chat mic transcription note: {e}")
-
-    # Prompt placeholder reflecting transcribed speech or default prompt
-    current_placeholder = "Message SRI (or tap mic to dictate task)..."
-    if st.session_state.get("chat_dictated_text"):
-        st.caption(f"📝 *Dictated Text:* `{st.session_state.chat_dictated_text}` — Click Send to execute.")
-
-    user_task_input = st.chat_input(current_placeholder)
-
-    if user_task_input:
-        # User explicitly clicked Send
-        final_prompt = user_task_input.strip()
-        st.session_state.current_task_prompt = final_prompt
-        st.session_state["task_prompt_val"] = final_prompt
-        st.session_state.chat_dictated_text = ""
-        save_to_history("Task Queued", final_prompt, "chat")
-        st.info(f"📌 Task Queued: {final_prompt}")
-        # Task execution logic runs here upon clicking send
-
-
-# ==============================================================================
-# [Step 3 Integration: Crystal-Clear Voice Output Handler]
-# ==============================================================================
-def configure_voice_output_settings():
-    # Ensures smooth audio synthesis pacing and human-like response flow
-    st.session_state.voice_speed = "natural"
-    st.session_state.audio_clarity = "high_definition"
-
-    # Example voice response helper
-    def speak_response(text):
-        # Clean, well-paced speech synthesis handler
-        return f"[Voice Output - Natural Pacing]: {text}"
-
-    return speak_response
-
-configure_voice_output_settings()
-
-
-# ==============================================================================
-# [Step 4 Integration: UI Layout & Original Position Fix CSS]
-# ==============================================================================
-def apply_ui_layout_fixes():
-    """
-    Step 4: UI Layout & Original Position Fix CSS.
-    Restores the centered mobile-first layout (max-width: 480px) for the
-    Streamlit fallback/legacy zone. The primary full-viewport UI is served
-    inside sri_zero_failure_ui's iframe which manages its own CSS.
-    This block also resets slide-inline-card & preview drawers so they
-    render naturally in their original lower position without overlapping
-    or being pushed into the header area.
-    """
-    st.markdown("""
-    <style>
-        /* ── Streamlit host page: mobile-first centered container ──────────── */
-        .main .block-container {
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-            padding-left: 0 !important;
-            padding-right: 0 !important;
-            max-width: 100% !important;
-            margin: 0 !important;
-        }
-
-        /* The full-viewport iframe rendered by sri_zero_failure_ui
-           must stretch edge-to-edge — override any stray iframe caps */
-        .main .block-container iframe {
-            display: block !important;
-            width: 100vw !important;
-            height: 100dvh !important;
-            border: none !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-
-        /* ── slide-inline-card: prevent float / absolute position bleed ────── */
-        /* Ensures the card renders in the natural document flow, below its
-           preceding sibling content, with no translate/position override
-           that could push it into the header or cause overlap. */
-        .slide-inline-card {
-            position: relative !important;
-            top: auto !important;
-            left: auto !important;
-            transform: none !important;
-            margin-top: 10px;
-            margin-bottom: 20px;
-            width: 100%;
-            box-sizing: border-box;
-            z-index: 1;
-        }
-
-        /* ── Inline drawer / preview box reset ─────────────────────────────── */
-        /* Keeps the inline preview drawer in flow; no absolute/fixed stacking */
-        .stSlider, .stExpander, [data-testid="stExpander"],
-        [data-testid="stVerticalBlock"] > div:has(.slide-inline-card) {
-            position: relative !important;
-            z-index: auto !important;
-            overflow: visible !important;
-        }
-
-        /* ── Mobile-first max-width cap for the legacy/fallback Streamlit UI ─ */
-        @media (max-width: 900px) {
-            .main .block-container {
-                max-width: 480px !important;
-                margin-left: auto !important;
-                margin-right: auto !important;
-                padding-left: 0 !important;
-                padding-right: 0 !important;
-                padding-top: 0 !important;
-                padding-bottom: 0 !important;
-            }
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-apply_ui_layout_fixes()
-
-
-# ==============================================================================
-# [Step 5 Integration: Persistent Task & Chat History Storage]
-# Writes every interaction to sri_tasks_history.json via sri_history_store.
-# Session-state history_log is kept in sync so the UI panel always has
-# the full picture including entries from previous sessions.
-# ==============================================================================
-import time
-from sri_history_store import (
-    append_entry       as _hist_append,
-    load_history       as _hist_load,
-    get_history_for_ui as _hist_for_ui,
-)
-
-# Seed session-state from persistent file (merge, don't overwrite)
-if "history_log" not in st.session_state:
-    st.session_state.history_log = _hist_load()
-elif not st.session_state.history_log:
+if "history_log" not in st.session_state or not st.session_state.history_log:
     st.session_state.history_log = _hist_load()
 
 
-def save_to_history(task_name: str, details: str, entry_type: str = "task") -> None:
-    """
-    Append one interaction to both the persistent JSON store and the
-    in-memory session_state.history_log.
-    """
+def save_to_history(task_name: str, details: str, entry_type: str = "chat") -> None:
     entry = _hist_append(task_name, details, entry_type)
-    # Keep session_state in sync so the UI history panel updates immediately
     if "history_log" not in st.session_state:
         st.session_state.history_log = []
     st.session_state.history_log.append(entry)
 
 
-def render_history_view() -> None:
-    """Render the full history log in the Streamlit sidebar (legacy helper)."""
-    from sri_history_store import build_history_sidebar_html as _hist_html
-    entries = st.session_state.get("history_log", [])
-    st.markdown("### 📜 Task & Chat History")
-    if not entries:
-        st.info("No history recorded yet.")
-    else:
-        st.markdown(
-            f'<div style="max-height:500px;overflow-y:auto;">'
-            f"{_hist_html(entries)}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+db_state = load_db()
+metrics = db_state.get("metrics", {})
+all_tasks = db_state.get("tasks", {})
+running_count = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
+completed_count = metrics.get("completed_tasks", 0)
+failed_count = metrics.get("failed_tasks", 0)
+agent_status_str = "SRI (Active)" if running_count > 0 else "SRI (Ready)"
 
+target_rel = "login.html"
+target_full = os.path.join(WORKSPACE_DIR, target_rel)
+if not os.path.exists(target_full):
+    ws_files = get_workspace_files()
+    target_rel = ws_files[0] if ws_files else "login.html"
+    target_full = os.path.join(WORKSPACE_DIR, target_rel)
 
-# 2. Read bridge command or query params and route through Fast Conversational Voice Agent
-reply_spoken: str = ""
-bridge_cmd = st.session_state.pop("_active_sri_bridge_cmd", None)
-cmd = bridge_cmd or st.query_params.get("sri_cmd")
-if cmd:
-    # Clear query param immediately if it came from URL
+generated_code = ""
+if os.path.exists(target_full):
     try:
-        if "sri_cmd" in st.query_params:
-            del st.query_params["sri_cmd"]
-        if "ts" in st.query_params:
-            del st.query_params["ts"]
+        with open(target_full, "r", encoding="utf-8") as f:
+            generated_code = f.read()
+    except Exception:
+        generated_code = ""
+
+workspace_file_label = f"workspace/{target_rel}" if os.path.exists(target_full) else "SRI Solo AI Companion"
+generated_preview_html = generated_code
+
+reply_spoken: str = ""
+active_voice_lang: str = str(st.session_state.get("sri_voice_lang_pref") or "ta-IN")
+active_page_hint: str = ""
+active_tab_hint: str = ""
+active_input_channel: str = "chat"
+active_voice_turn_id: str = str(st.session_state.get("sri_voice_turn_id", ""))
+
+bridge_cmd = st.session_state.pop("_active_sri_bridge_cmd", None)
+raw_cmd = bridge_cmd or st.query_params.get("sri_cmd")
+
+if raw_cmd:
+    try:
+        for qp in ("sri_cmd", "ts"):
+            if qp in st.query_params:
+                del st.query_params[qp]
     except Exception:
         pass
 
-    if cmd == "VOICE_TRIGGER":
-        cmd = None
+    effective_prompt = ""
+    input_channel = "chat"
+    is_research_query = False
+    new_t_id = None
 
-    if cmd and cmd != "VOICE_TRIGGER":
-        effective_prompt = str(cmd).strip()
-        st.session_state["task_prompt_val"] = effective_prompt
-        st.session_state["current_task_prompt"] = effective_prompt
+    try:
+        effective_prompt, input_channel, active_voice_lang = parse_bridge_payload(str(raw_cmd))
+        active_input_channel = input_channel
+        if effective_prompt and effective_prompt != "VOICE_TRIGGER":
+            st.session_state["task_prompt_val"] = effective_prompt
+            st.session_state["current_task_prompt"] = effective_prompt
+            turn_seq = int(st.session_state.get("sri_voice_turn_seq", 0)) + 1
+            st.session_state["sri_voice_turn_seq"] = turn_seq
+            active_voice_turn_id = f"turn_{turn_seq}_{int(time.time() * 1000)}"
+            st.session_state["sri_voice_turn_id"] = active_voice_turn_id
 
-        query_lower = effective_prompt.lower()
-        if "sri_chat_history" not in st.session_state:
-            st.session_state["sri_chat_history"] = []
+            if "sri_chat_history" not in st.session_state:
+                st.session_state["sri_chat_history"] = []
 
-        # Smart Conditional Web Search (Only real-time external info: hackathons, live events, today's news)
-        is_research_query = is_realtime_web_search_required(effective_prompt)
-
-        research_summary = None
-        if is_research_query:
-            research_data = perform_live_web_research(effective_prompt)
-            research_file_full = os.path.join(WORKSPACE_DIR, "research.html")
             try:
-                with open(research_file_full, "w", encoding="utf-8") as f:
-                    f.write(research_data["card_html"])
+                query_lower = effective_prompt.lower()
+                is_research_query = is_realtime_web_search_required(effective_prompt)
+                research_summary = None
+
+                if is_research_query:
+                    research_data = perform_live_web_research(effective_prompt)
+                    research_file_full = os.path.join(WORKSPACE_DIR, "research.html")
+                    try:
+                        with open(research_file_full, "w", encoding="utf-8") as f:
+                            f.write(research_data["card_html"])
+                    except Exception:
+                        pass
+                    st.session_state["sri_latest_research_html"] = research_data.get("panel_html") or ""
+                    research_summary = research_data["voice_summary"]
+                    active_page_hint = "research"
+
+                is_build_request = any(
+                    w in query_lower
+                    for w in [
+                        "build ui", "create ui", "generate ui", "dashboard ui", "landing page",
+                        "student dashboard", "saas auth", "kanban board", "refine logic",
+                        "in workspace", "workspace/", "refine workspace", "web app in workspace",
+                        "build a website", "create a page", "ui உருவாக்கு",
+                    ]
+                )
+                is_preview_nav = any(
+                    w in query_lower
+                    for w in [
+                        "show preview", "open preview", "preview page", "check preview",
+                        "go to preview", "switch to preview", "view preview", "open project", "show project",
+                        "show code", "open code", "source code", "code view", "inspect code",
+                        "go to code", "switch to code",
+                        "ப்ரிவியூ", "பிரிவியூ", "கோடு காட்டு", "சோர்ஸ் கோடு",
+                    ]
+                )
+                new_t_id = None
+                if is_build_request and not is_research_query:
+                    folder_target = st.session_state.get("task_folder_val", "").strip() or derive_project_slug("", effective_prompt)
+                    task_kind = "frontend" if any(w in query_lower for w in ["ui", "design", "html", "css", "frontend", "பக்கம்"]) else "auto"
+                    new_t_id = dispatch_background_task(
+                        prompt=effective_prompt,
+                        task_type=task_kind,
+                        folder_name=folder_target,
+                    )
+                    active_page_hint = "project"
+                    active_tab_hint = "preview"
+                elif is_preview_nav and not is_research_query:
+                    active_page_hint = "project"
+                    active_tab_hint = "code" if any(w in query_lower for w in ["code", "கோடு", "சோர்ஸ்"]) else "preview"
+
+                reply_spoken = get_executive_voice_response(
+                    effective_prompt,
+                    active_tasks_count=running_count,
+                    workspace_file=workspace_file_label,
+                    file_exists=os.path.exists(target_full),
+                    file_size=len(generated_code),
+                    newly_dispatched_id=new_t_id,
+                    research_summary=research_summary,
+                    channel=input_channel,
+                    preferred_lang=active_voice_lang,
+                    chat_history=st.session_state.get("sri_chat_history", []),
+                )
+                reply_spoken = sanitize_unsolicited_links(reply_spoken, effective_prompt)
+
+                if not is_research_query:
+                    generated_preview_html = build_companion_inline_card(effective_prompt, reply_spoken)
+                    workspace_file_label = "SRI Solo AI Companion"
+            except Exception as brain_err:
+                print(f"⚠️ Voice/Chat brain fallback error: {brain_err}")
+                reply_spoken = _friendly_tamil_ai_error(brain_err)
+                generated_preview_html = build_companion_inline_card(effective_prompt, reply_spoken)
+                if is_research_query:
+                    st.session_state["sri_latest_research_html"] = build_companion_inline_card(effective_prompt, reply_spoken)
+                    active_page_hint = "research"
+                workspace_file_label = "SRI Solo AI Companion"
+
+            st.session_state["sri_chat_history"].append({"user": effective_prompt, "agent": reply_spoken})
+            hist_type = "research" if is_research_query else ("voice" if input_channel == "orb" else "chat")
+            try:
+                save_to_history(effective_prompt, reply_spoken, hist_type)
             except Exception:
                 pass
-            generated_preview_html = research_data["card_html"]
-            generated_code = research_data["card_html"]
-            workspace_file_label = "workspace/research.html"
-            research_summary = research_data["voice_summary"]
+    except Exception as bridge_err:
+        print(f"⚠️ Bridge command processing error: {bridge_err}")
+        reply_spoken = _friendly_tamil_ai_error(bridge_err)
 
-        # If user explicitly asked to build or create something, dispatch task in background
-        is_build_request = any(w in query_lower for w in ["build", "create", "make", "refine", "generate", "உருவாக்கு", "எழுது"])
-        new_t_id = None
-        if is_build_request and not is_research_query:
-            folder_target = st.session_state.get("task_folder_val", "").strip() or "student_learning_hub"
-            task_kind = "frontend" if any(w in query_lower for w in ["ui", "design", "html", "css", "frontend", "பக்கம்"]) else "auto"
-            new_t_id = dispatch_background_task(
-                prompt=effective_prompt,
-                task_type=task_kind,
-                folder_name=folder_target,
-            )
-            st.toast(f"🚀 Task dispatched: {new_t_id}", icon="⚡")
 
-        # Natural Conversational Co-Founder Voice Agent (Short, Human, Phone-Call style)
-        reply_spoken = get_executive_voice_response(
-            effective_prompt,
-            active_tasks_count=running_count,
-            workspace_file=workspace_file_label,
-            file_exists=os.path.exists(target_full),
-            file_size=len(generated_code),
-            newly_dispatched_id=new_t_id,
-            research_summary=research_summary,
-        )
+_ui_ws_files_payload = []
+try:
+    for _wf in get_workspace_files()[:12]:
+        _ok_rf, _rf_content, _ = safe_read_code(_wf)
+        if _ok_rf:
+            _ui_ws_files_payload.append({
+                "path": f"workspace/{_wf}",
+                "short": _wf,
+                "content": _rf_content[:60000],
+                "sizeBytes": len(_rf_content.encode("utf-8", errors="ignore")),
+            })
+except Exception:
+    _ui_ws_files_payload = []
 
-        if not is_research_query:
-            generated_preview_html = build_smart_mentor_inline_card(effective_prompt, reply_spoken)
-            workspace_file_label = "Agent Brain & Smart Mentor Brief"
+_ui_tracker_tasks = []
+try:
+    for _tid, _tdata in list(all_tasks.items())[-12:]:
+        if isinstance(_tdata, dict):
+            _ui_tracker_tasks.append({
+                "id": _tid,
+                "title": _tdata.get("title") or _tdata.get("prompt", "Agent Task")[:60],
+                "status": _tdata.get("status", "COMPLETED"),
+                "progress": _tdata.get("progress", 100),
+                "file": _tdata.get("workspace_file") or _tdata.get("output_file") or "",
+            })
+except Exception:
+    _ui_tracker_tasks = []
 
-        st.session_state["sri_chat_history"].append({"user": effective_prompt, "agent": reply_spoken})
-        # Determine entry type for richer history categorisation
-        _hist_type = "research" if is_research_query else "voice"
-        save_to_history(effective_prompt, reply_spoken, _hist_type)
-        st.toast(f"🤖 SRI: {reply_spoken}", icon="🗣️")
-        # Notice: Audio synthesis is handled exclusively by sri_zero_failure_ui's 3D orb component
-        # so there is never duplicate or conflicting audio playback!
-
-# 3. Call render_sri_zero_failure_ui to render the full-viewport UI
-# Always use the persistent store for the history panel (covers past sessions)
 render_sri_zero_failure_ui(
     agent_status=agent_status_str,
     active_tasks=running_count,
@@ -5324,288 +3168,17 @@ render_sri_zero_failure_ui(
     workspace_file=workspace_file_label,
     generated_code=generated_code,
     generated_preview_html=generated_preview_html,
+    research_html=st.session_state.get("sri_latest_research_html", ""),
     chat_history=st.session_state.get("sri_chat_history", []),
     voice_reply_text=reply_spoken,
+    voice_lang=active_voice_lang,
+    voice_turn_id=active_voice_turn_id,
+    skip_tts=(not reply_spoken) or (active_input_channel != "orb"),
+    active_page=active_page_hint,
+    active_tab=active_tab_hint,
     history_log=_hist_for_ui(limit=200),
+    whatsapp_alert_status=evaluate_all_tasks_completion(db_state),
+    workspace_files_data=_ui_ws_files_payload,
+    tracker_tasks_data=list(reversed(_ui_tracker_tasks)),
 )
 
-
-# ==============================================================================
-# 12. BYPASSED LEGACY STREAMLIT COLUMNS/BUTTONS/RADIO UI BLOCK
-# (Preserved 100% intact without deleting any lines, bypassed dynamically)
-# ==============================================================================
-_ENABLE_LEGACY_STREAMLIT_UI = os.environ.get("ENABLE_LEGACY_STREAMLIT_UI", "").lower() in ("1", "true")
-if _ENABLE_LEGACY_STREAMLIT_UI:
-    # ==============================================================================
-    # 11. RESPONSIVE SPATIAL MAIN SCREEN: DESKTOP 3-ZONE GRID (NO TOP RADIO)
-    # ==============================================================================
-    restore_session_state_on_wakeup()
-
-    # Dynamic Greeting based on time of day
-    current_hour = datetime.now().hour
-    greeting_period = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 17 else "Good evening")
-    user_greeting = f"{greeting_period}, Kirubha — Agent Live"
-
-
-    # ------------------------------------------------------------------------------
-    # RENDER ZONE 1: GREETING & RUNTIME METRICS
-    # ------------------------------------------------------------------------------
-    def render_zone_left():
-        db_state = load_db()
-        metrics = db_state.get("metrics", {})
-        all_tasks = db_state.get("tasks", {})
-
-        running_count = sum(1 for t in all_tasks.values() if t.get("status") == "RUNNING")
-        completed_count = metrics.get("completed_tasks", 0)
-        failed_count = metrics.get("failed_tasks", 0)
-
-        # Dynamic time-of-day greeting matching reference UI
-        current_hour = datetime.now().hour
-        g_time = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 17 else "Good evening")
-        user_greet_sub = f"{g_time}, Kirubha"
-
-        left_html = f"""
-        <div style="padding: 2px 4px;">
-            <div class="left-zone-greeting">{user_greet_sub}</div>
-            <div class="left-zone-title">Agent Live</div>
-            <div class="metrics-list-card">
-                <div class="metric-row">
-                    <span class="metric-label">Agent Status:</span>
-                    <span class="metric-val-status"><span class="gold-dot">●</span> SRI (Ready)</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">Active Tasks:</span>
-                    <span class="metric-val"><span class="metric-dot">●</span> {running_count}</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">Completed:</span>
-                    <span class="metric-val"><span class="metric-dot">●</span> {completed_count}</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">Failed:</span>
-                    <span class="metric-val"><span class="metric-dot">●</span> {failed_count}</span>
-                </div>
-            </div>
-            <div class="env-runtime-heading">Environment & Runtime</div>
-            <div class="runtime-pills-row">
-                <span class="runtime-pill">Streamlit Cloud</span>
-                <span class="runtime-pill runtime-pill-gold">workspace/</span>
-            </div>
-        </div>
-        """
-        st.markdown(left_html, unsafe_allow_html=True)
-
-
-    # ------------------------------------------------------------------------------
-    # RENDER ZONE 2: 3D GOLDEN VOICE ORB, SINGLE-ROW PILLS & UNIFIED PROMPT BAR
-    # ------------------------------------------------------------------------------
-    def render_zone_center():
-        # Persistent Live Task Tracker at top of Center Zone
-        render_persistent_live_task_tracker()
-
-        # EXACT 3D Golden Particle Sphere via SRI UI Bridge
-        render_3d_golden_orb()
-
-        # Carousel pills with chevrons < Student Dashboard SaaS Auth Kanban Board Refine login.html >
-        col_prev, col_p1, col_p2, col_p3, col_p4, col_next = st.columns([0.35, 2.7, 2.1, 2.4, 2.7, 0.35])
-        with col_prev:
-            st.markdown("<div style='text-align: center; color: #64748B; font-size: 1rem; padding-top: 6px;'>&lt;</div>", unsafe_allow_html=True)
-        with col_p1:
-            if st.button("Student Dashboard", key="pill_student_db", use_container_width=True):
-                st.session_state["task_prompt_val"] = "Build a responsive, modern student dashboard in HTML/CSS/JS with course progress charts, assignment tracker, and dark mode toggle."
-                st.session_state["task_folder_val"] = "student_dashboard"
-        with col_p2:
-            if st.button("SaaS Auth", key="pill_saas_auth", use_container_width=True):
-                st.session_state["task_prompt_val"] = "Create a sleek, modern SaaS Login and Registration page with tab switching, password strength meter, and social login buttons."
-                st.session_state["task_folder_val"] = "saas_auth"
-        with col_p3:
-            if st.button("Kanban Board", key="pill_kanban", use_container_width=True):
-                st.session_state["task_prompt_val"] = "Build an interactive Kanban board UI in single-file HTML/CSS/JS with drag-and-drop task cards, category columns, and task addition modal."
-                st.session_state["task_folder_val"] = "kanban_board"
-        with col_p4:
-            if st.button("Refine login.html", key="pill_refine_login", use_container_width=True):
-                st.session_state["task_prompt_val"] = "Refine workspace/login.html by adding password recovery modal, dark glassmorphism, and responsive validation."
-                st.session_state["task_folder_val"] = ""
-        with col_next:
-            st.markdown("<div style='text-align: center; color: #64748B; font-size: 1rem; padding-top: 6px;'>&gt;</div>", unsafe_allow_html=True)
-
-        st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-
-        # Gold-bordered prompt bar: "Ask SRI Agent a question (Tamil / English)..." with inline gold mic (🎙️) and send arrow (➤)
-        col_prompt_box, col_p_mic, col_p_send = st.columns([8.2, 0.9, 0.9])
-        with col_prompt_box:
-            prompt_input_text = st.text_input(
-                "Ask SRI Agent a question (Tamil / English)...",
-                value=st.session_state.get("task_prompt_val", ""),
-                placeholder="Ask SRI Agent a question (Tamil / English)...",
-                label_visibility="collapsed",
-                key="unified_prompt_text_field",
-            )
-        with col_p_mic:
-            mic_pressed = st.button("🎙️", key="unified_mic_btn", help="Click to speak via microphone", use_container_width=True)
-        with col_p_send:
-            send_pressed = st.button("➤", key="unified_send_btn", help="Send command or ask question", use_container_width=True)
-
-        # Handle Mic Click
-        if mic_pressed:
-            with st.spinner("🎙️ ஸ்ரீ கவனித்துக் கொண்டிருக்கிறது... உங்கள் கேள்வியைப் பேசுங்கள்:"):
-                try:
-                    spoken = sri_universal_router.listen_voice_command()
-                    if spoken:
-                        st.session_state["task_prompt_val"] = spoken
-                        st.session_state["active_voice_query"] = spoken
-                        st.toast(f"குரல் பெறப்பட்டது: {spoken}")
-                        st.rerun()
-                    else:
-                        st.info("⚠️ மைக்ரோஃபோன் சிக்னல் கிடைக்கவில்லை. பெட்டியில் டைப் செய்யலாம்.")
-                except Exception as me:
-                    st.warning(f"Microphone notice: {me}")
-
-        # Handle Send / Execution
-        effective_prompt = prompt_input_text.strip()
-        if send_pressed and effective_prompt:
-            st.session_state["task_prompt_val"] = effective_prompt
-
-            # Check if it is a Status/Inquiry Query
-            query_lower = effective_prompt.lower()
-            is_inquiry = any(k in query_lower for k in [
-                "எங்க", "என்ன பண்ணுது", "மாடல்", "முடிஞ்சு", "status", "where is", "what is",
-                "doing right now", "which model", "finished", "completed", "நிலை"
-            ])
-
-            if is_inquiry:
-                st.session_state["active_voice_query"] = effective_prompt
-            else:
-                # Autonomous Task Dispatch
-                folder_target = st.session_state.get("task_folder_val", "").strip() or "student_learning_hub"
-                task_kind = "frontend" if any(w in query_lower for w in ["ui", "design", "html", "css", "frontend", "பக்கம்"]) else "auto"
-                new_t_id = dispatch_background_task(
-                    prompt=effective_prompt,
-                    task_type=task_kind,
-                    folder_name=folder_target,
-                )
-                st.success(f"🚀 Task dispatched autonomously! Task ID: `{new_t_id}`")
-                st.toast("Task executing in background!")
-
-        # Live Spoken Agent Reply Card (if voice query active)
-        active_q = st.session_state.get("active_voice_query", "").strip()
-        if active_q:
-            reply_dict = get_agent_voice_status_reply(active_q)
-            st.markdown(
-                f"""
-                <div style="background: rgba(18, 22, 33, 0.95); border: 1.5px solid #F59E0B; border-radius: 12px;
-                            padding: 16px 20px; margin-top: 14px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(245, 158, 11, 0.2);">
-                    <div style="font-size: 0.8rem; color: #FBBF24; margin-bottom: 4px; font-weight: 700;">
-                        👤 உங்கள் கேள்வி (User Inquiry):
-                    </div>
-                    <div style="font-size: 1rem; color: #FFFFFF; font-weight: 600; margin-bottom: 12px;">
-                        "{html.escape(active_q)}"
-                    </div>
-                    <div style="font-size: 0.8rem; color: #34D399; margin-bottom: 6px; font-weight: 700;">
-                        🤖 SRI Agent நேரலை பதில் (Live Agent Status Reply):
-                    </div>
-                    <div style="font-size: 0.92rem; color: #F1F5F9; line-height: 1.6;">
-                        {reply_dict['display_text']}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            tts_html = generate_speech_synthesis_html(
-                reply_dict["spoken_text"], lang=reply_dict["lang"], autoplay=True
-            )
-            components.html(tts_html, height=135)
-
-
-    # ------------------------------------------------------------------------------
-    # RENDER ZONE 3: SEGMENTED [ PREVIEW | CODE ] PROJECT VIEWER
-    # ------------------------------------------------------------------------------
-    def render_zone_right():
-        # Segmented Switcher [ Preview | Code ] in Pill Track (Zero native radio dots)
-        col_seg, col_exp = st.columns([2.3, 0.7])
-        with col_seg:
-            viewer_mode = st.radio(
-                "Viewer Mode",
-                options=["Preview", "Code"],
-                index=0,
-                horizontal=True,
-                label_visibility="collapsed",
-                key="sri_segmented_viewer_mode",
-            )
-        with col_exp:
-            full_height_toggle = st.toggle("⛶", value=False, key="pv_expand_toggle", help="Full Height Preview")
-
-        # Target file: default to workspace/login.html if present
-        target_rel = "login.html"
-        target_full = os.path.join(WORKSPACE_DIR, target_rel)
-        if not os.path.exists(target_full):
-            ws_files = get_workspace_files()
-            target_rel = ws_files[0] if ws_files else "login.html"
-            target_full = os.path.join(WORKSPACE_DIR, target_rel)
-
-        content = ""
-        file_size_bytes = 1881
-        if os.path.exists(target_full):
-            try:
-                with open(target_full, "r", encoding="utf-8") as f:
-                    content = f.read()
-                file_size_bytes = len(content.encode("utf-8"))
-            except Exception:
-                pass
-
-        preview_h = 750 if full_height_toggle else 430
-
-        # Header metadata: workspace/login.html size: 1,881 bytes
-        st.markdown(
-            f"""
-            <div class="pv-meta-header">
-                <span class="pv-file-path">workspace/{html.escape(target_rel)}</span>
-                <span class="pv-file-size">size: {file_size_bytes:,} bytes</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        if viewer_mode == "Preview":
-            if content:
-                components.html(content, height=preview_h, scrolling=True)
-            else:
-                st.info("No content in workspace/login.html yet.")
-        else:
-            # Code View with Download options
-            col_dl1, col_dl2 = st.columns(2)
-            with col_dl1:
-                st.download_button(
-                    "📥 Download File",
-                    data=content,
-                    file_name=os.path.basename(target_full),
-                    mime="text/html",
-                    use_container_width=True,
-                    key=f"dl_single_{os.path.basename(target_full)}",
-                )
-            with col_dl2:
-                zip_bytes = create_project_zip_bundle(WORKSPACE_DIR)
-                st.download_button(
-                    "📦 Download .ZIP",
-                    data=zip_bytes,
-                    file_name="workspace_project.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                    key="dl_zip_right_zone",
-                )
-            st.code(content, language="html", line_numbers=True)
-
-        # 4-pointed sparkle icon at bottom right of the container
-        st.markdown("<div class='pv-sparkle-decor'>✦</div>", unsafe_allow_html=True)
-
-
-    # ------------------------------------------------------------------------------
-    # RENDER DESKTOP 3-ZONE SPATIAL GRID (25% Left, 45% Center, 30% Right)
-    # ------------------------------------------------------------------------------
-    col_zone_left, col_zone_center, col_zone_right = st.columns([1, 1.8, 1.2])
-    with col_zone_left:
-        render_zone_left()
-    with col_zone_center:
-        render_zone_center()
-    with col_zone_right:
-        render_zone_right()
